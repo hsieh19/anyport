@@ -1,13 +1,22 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import Sidebar from '@/components/Sidebar.vue';
 import ModbusPanel from '@/components/ModbusPanel.vue';
+import ProfileLibraryView from '@/views/ProfileLibraryView.vue';
 
 const currentView = ref('modbus');
 
 function handleTabChange(id: string) {
   currentView.value = id;
 }
+
+const pageTitle = computed(() => {
+  switch (currentView.value) {
+    case 'modbus': return 'Modbus RTU 调试';
+    case 'profiles': return '点表库管理';
+    default: return '控制台';
+  }
+});
 </script>
 
 <template>
@@ -17,7 +26,7 @@ function handleTabChange(id: string) {
     <main class="main-content">
       <header class="content-header">
         <h2 class="view-title">
-          {{ currentView === 'modbus' ? 'Modbus RTU 调试' : '控制台' }}
+          {{ pageTitle }}
         </h2>
         <div class="header-actions">
           <!-- 预留顶部操作区 -->
@@ -28,6 +37,7 @@ function handleTabChange(id: string) {
         <Transition name="fade" mode="out-in">
           <keep-alive>
             <ModbusPanel v-if="currentView === 'modbus'" />
+            <ProfileLibraryView v-else-if="currentView === 'profiles'" />
             <div v-else class="placeholder-view">
               <h3>功能开发中...</h3>
             </div>

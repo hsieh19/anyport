@@ -1,15 +1,170 @@
 <script setup lang="ts">
-/**
- * Modbus RTU 调试面板
- */
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useDeviceStore } from '@/stores/deviceStore';
+import { useProfileStore } from '@/stores/profileStore'; 
 import { ModbusFunctionCode } from '@/protocols/modbus';
 import type { ModbusRtuCommand } from '@/protocols/modbus';
 import { ProtocolType } from '@shared/types/protocol.types';
 
 const deviceStore = useDeviceStore();
+const profileStore = useProfileStore();
 const isSecure = window.isSecureContext;
+
+// 初始化加载点表
+onMounted(() => {
+  if (profileStore.profiles.length === 0) {
+    profileStore.loadProfiles();
+  }
+});
+
+// 辅助函数：将多种格式的 func_code 转换为数字数组
+function normalizeFuncCodes(input: any): number[] {
+  const arr = Array.isArray(input) ? input : [input];
+  return arr.map(item => {
+    if (typeof item === 'string') {
+      // 处理 "0x03" 或 "3" 格式
+      return item.startsWith('0x') ? parseInt(item, 16) : parseInt(item, 10);
+    }
+    return Number(item);
+  }).filter(n => !isNaN(n));
+}
+
+/**
+ * 辅助函数：Modbus 地址归一化
+ * 将 PLC 地址 (如 40600) 转换为协议偏移量 (如 599 或 40600)
+ * 逻辑：
+ * 1. 如果是 Base 0 (base1 = false)，则视为原始偏移量不做任何处理。
+ * 2. 如果是 Base 1 (base1 = true)，则尝试根据功能码判定是否属于 PLC 地址段并减去基准。
+ */
+function getModbusOffset(addr: number, fc: number, base1: boolean): number {
+  if (!base1) return addr; // Base 0 模式下，永远不自动减去基准值
+
+  const fcNum = Number(fc);
+  
+  // 仅在 Base 1 模式下，尝试将标准 PLC 范围地址识别为 1-based 偏移并转换
+  if (addr >= 40001 && addr <= 49999 && (fcNum === 3 || fcNum === 6 || fcNum === 16)) return addr - 40001;
+  if (addr >= 30001 && addr <= 39999 && fcNum === 4) return addr - 30001;
+  if (addr >= 10001 && addr <= 19999 && fcNum === 2) return addr - 10001;
+  if (addr >= 1 && addr <= 9999 && (fcNum === 1 || fcNum === 5 || fcNum === 15)) return addr - 1; 
+  
+  return addr;
+}
+
+// --- 数据解析核心逻辑 ---
+
+/**
+ * 辅助：跨寄存器解析 (支持 16/32 位，及各种字节序)
+ * byteOrder: 'ABCD' (默认大端), 'CDAB' (小端交换), 'BADC', 'DCBA'
+ */
+function getExtendedValue(allValues: number[], offset: number, dataType: string, byteOrder: string = 'ABCD'): number | null {
+  const val1 = allValues[offset]; // 原始第1个寄存器 (16bit)
+  if (val1 === undefined) return null;
+
+  // 32位数据解析 (需要读取两个寄存器)
+  if (dataType === 'int32' || dataType === 'uint32' || dataType === 'float32') {
+    const val2 = allValues[offset + 1]; // 原始第2个寄存器 (16bit)
+    if (val2 === undefined) return null;
+
+    const buffer = new ArrayBuffer(4);
+    const view = new DataView(buffer);
+    
+    // 将两个 16bit 寄存器拼成 4 个字节，根据 byteOrder 排布
+    //ABCD: val1_H, val1_L, val2_H, val2_L
+    //CDAB: val2_H, val2_L, val1_H, val1_L
+    //BADC: val1_L, val1_H, val2_L, val2_H
+    //DCBA: val2_L, val2_H, val1_L, val1_H
+    
+    const h1 = (val1 >> 8) & 0xFF;
+    const l1 = val1 & 0xFF;
+    const h2 = (val2 >> 8) & 0xFF;
+    const l2 = val2 & 0xFF;
+
+    let bytes = [h1, l1, h2, l2]; // ABCD
+    if (byteOrder === 'CDAB') bytes = [h2, l2, h1, l1];
+    else if (byteOrder === 'BADC') bytes = [l1, h1, l2, h2];
+    else if (byteOrder === 'DCBA') bytes = [l2, h2, l1, h1];
+
+    bytes.forEach((b, i) => view.setUint8(i, b));
+
+    if (dataType === 'float32') return view.getFloat32(0, false);
+    if (dataType === 'int32') return view.getInt32(0, false);
+    return view.getUint32(0, false);
+  }
+
+  // 16位数据解析
+  const buffer = new ArrayBuffer(2);
+  const view = new DataView(buffer);
+  
+  // 16位也可能有字节交换 (BADC/DCBA 下通常意味着 16bit 内部字节交换)
+  if (byteOrder === 'BADC' || byteOrder === 'DCBA') {
+    view.setUint8(0, val1 & 0xFF);
+    view.setUint8(1, (val1 >> 8) & 0xFF);
+  } else {
+    view.setUint16(0, val1, false);
+  }
+
+  if (dataType === 'int16') return view.getInt16(0, false);
+  return view.getUint16(0, false);
+}
+
+// 核心解析函数
+function parseAutoValue(regObj: any, allValues: any[], offset: number, defaultEndian: string = 'ABCD'): string | null {
+  if (!regObj) return null;
+
+  // 区分处理：如果是线圈类型（discrete_input/coil），值已经是 0/1 或 boolean
+  let val: any;
+  const isCoil = regObj.data_type === 'coil' || regObj.data_type === 'discrete_input';
+  
+  if (isCoil) {
+    const rawVal = allValues[offset];
+    val = (typeof rawVal === 'boolean') ? (rawVal ? 1 : 0) : rawVal;
+  } else {
+    // 优先使用点表定义的字节序，否则使用点表全局默认字节序
+    const endian = regObj.endian || defaultEndian || 'ABCD';
+    val = getExtendedValue(allValues as number[], offset, regObj.data_type || 'uint16', endian);
+  }
+
+  if (val === null || val === undefined) return null;
+
+  // 1. Mapping 映射
+  if (regObj.mapping) {
+    const strKey = val.toString();
+    if (regObj.mapping[strKey] !== undefined) return regObj.mapping[strKey];
+    
+    const hexKey = '0x' + Number(val).toString(16).toUpperCase();
+    const hexKeyLower = '0x' + Number(val).toString(16).toLowerCase();
+    if (regObj.mapping[hexKey] !== undefined) return regObj.mapping[hexKey];
+    if (regObj.mapping[hexKeyLower] !== undefined) return regObj.mapping[hexKeyLower];
+  }
+
+  // 2. Scale 缩放 (仅对非线圈类型)
+  if (!isCoil && regObj.scale !== undefined) {
+    val = (Number(val) * regObj.scale).toFixed(3);
+    val = parseFloat(val); // 消除多余 0
+  }
+
+  // 3. Unit 单位
+  const unitStr = regObj.unit ? ` ${regObj.unit}` : '';
+  return `${val}${unitStr}`;
+}
+
+// 运行模式
+type RunMode = 'manual' | 'auto';
+const runMode = ref<RunMode>('manual');
+
+// 自动模式状态
+const selectedProfileId = ref<string | null>(null);
+const selectedRegisterName = ref<string>('');
+const isProfilePickerShow = ref(false);
+
+const selectedProfile = computed(() => 
+  profileStore.profiles.find(p => p.id === selectedProfileId.value)
+);
+
+const currentRegisterObj = computed(() => {
+  if (!selectedProfile.value || !selectedRegisterName.value) return null;
+  return selectedProfile.value.data.registers.find(r => r.name === selectedRegisterName.value);
+});
 
 // 表单状态
 const slaveAddress = ref(1);
@@ -19,14 +174,16 @@ const quantity = ref(1);
 const writeValue = ref(0);
 const writeValues = ref('');
 
+// (已移除原处的 watch(selectedRegisterName)，移动到下方以确保 useBase1 已定义)
+
 // 连接配置
 const baudRate = ref(9600);
 const dataBits = ref(8);
 const stopBits = ref(1);
 const parity = ref<'none' | 'even' | 'odd'>('none');
 
-// 功能码选项
-const functionCodeOptions = [
+// 原始功能码选项定义
+const ALL_FUNCTION_CODES = [
   { value: ModbusFunctionCode.READ_COILS, label: '01 - 读线圈' },
   { value: ModbusFunctionCode.READ_DISCRETE_INPUTS, label: '02 - 读离散输入' },
   { value: ModbusFunctionCode.READ_HOLDING_REGISTERS, label: '03 - 读保持寄存器' },
@@ -36,6 +193,21 @@ const functionCodeOptions = [
   { value: ModbusFunctionCode.WRITE_MULTIPLE_COILS, label: '0F - 写多个线圈' },
   { value: ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS, label: '10 - 写多个寄存器' },
 ];
+
+// 根据运行模式和选中的寄存器，动态过滤可用的功能码
+const availableFunctionCodeOptions = computed(() => {
+  if (runMode.value === 'manual') {
+    return ALL_FUNCTION_CODES;
+  }
+  
+  // 自动模式下：未选择点表或未选择寄存器，则没有可选功能码
+  if (!selectedProfile.value || !selectedRegisterName.value || !currentRegisterObj.value) {
+    return [];
+  }
+  
+  const allowed = normalizeFuncCodes(currentRegisterObj.value.func_code);
+  return ALL_FUNCTION_CODES.filter(opt => allowed.includes(opt.value));
+});
 
 // 波特率选项
 const baudRateOptions = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200];
@@ -135,7 +307,6 @@ function setBase(val: boolean) {
 }
 
 // 监听地址变化 (Base 1 模式下禁止输入 0)
-import { watch } from 'vue';
 watch([startAddress, useBase1], ([newAddr, isBase1]) => {
   if (isBase1 && newAddr === 0) {
     triggerAlert('在 Base 1 模式下，起始地址最小为 1。');
@@ -167,6 +338,32 @@ const plcAddress = computed(() => {
       return addr;
   }
 });
+
+// --- 自动模式：地址与表单联动逻辑 ---
+
+// 提取公用的地址填充逻辑
+function updateAutoAddress() {
+  if (runMode.value === 'auto' && currentRegisterObj.value) {
+    const reg = currentRegisterObj.value;
+    const allowedCodes = normalizeFuncCodes(reg.func_code);
+    
+    // 智能默认：自动切换到该寄存器支持的第一个功能码
+    if (allowedCodes.length > 0) {
+      functionCode.value = allowedCodes[0] as ModbusFunctionCode;
+    }
+    
+    const firstCode = allowedCodes.length > 0 ? allowedCodes[0] : functionCode.value;
+    // 强制根据目前的 useBase1 状态重新计算
+    startAddress.value = getModbusOffset(reg.addr || 0, firstCode, useBase1.value);
+    quantity.value = reg.count || 1;
+  }
+}
+
+// 监听寄存器选择
+watch(selectedRegisterName, updateAutoAddress);
+
+// 监听 Base 开关，实时重算地址 (确保 useBase1 已定义)
+watch(useBase1, updateAutoAddress);
 
 // 计算完整的 RTU 报文预览
 const fullRawFrame = computed(() => {
@@ -293,61 +490,149 @@ const latestReadResults = computed(() => {
   const lastReadLog = deviceStore.logs[lastRxIndex];
   if (!lastReadLog || !lastReadLog.parsed) return [];
 
-  // 获取请求时的起始地址：从该 RX 之后的最近一条 TX 中解析
+  // 获取请求时的起始地址与数量：从该 RX *之后* (即时间更早) 的最近一条 TX 中解析
   let physicalStartAddr = 0;
+  let requestedQuantity = 0;
+
   for (let i = lastRxIndex + 1; i < deviceStore.logs.length; i++) {
     const log = deviceStore.logs[i];
     if (log && log.direction === 'tx') {
        const hexs = log.hex.split(' ');
-       if (hexs.length >= 4) {
-         // Modbus RTU 请求报文的 第3,4位是地址高低字节
+       // Modbus RTU 请求长度通常为 8 字节
+       if (hexs.length >= 6) {
+         // 请求：Addr_H(2), Addr_L(3), Qty_H(4), Qty_L(5)
          physicalStartAddr = (parseInt(hexs[2] || '0', 16) << 8) | parseInt(hexs[3] || '0', 16);
+         requestedQuantity = (parseInt(hexs[4] || '0', 16) << 8) | parseInt(hexs[5] || '0', 16);
        }
        break;
     }
   }
 
-  const results: Array<{ 
-    index: number; 
-    address: number; 
-    value: number | boolean; 
-    decStr: string;
-    hexStr: string;
-    binStr: string;
-  }> = [];
+  const results: Array<any> = [];
   
   // 处理保持寄存器/输入寄存器 (03, 04)
   if (lastReadLog.parsed.registers) {
-    lastReadLog.parsed.registers.forEach((val: number, index: number) => {
+    const allVals = lastReadLog.parsed.registers;
+    // 关键修正：只处理请求数量范围内的数据
+    const displayVals = requestedQuantity > 0 ? allVals.slice(0, requestedQuantity) : allVals;
+    
+    let pendingSummary: any = null;
+
+    displayVals.forEach((val: number, index: number) => {
       const currentPhysicalAddr = physicalStartAddr + index;
       const displayAddr = useBase1.value ? currentPhysicalAddr + 1 : currentPhysicalAddr;
       
+      let matchedReg = null;
+      let isFollower = false;
+
+      // 自动模式逻辑
+      if (runMode.value === 'auto' && selectedProfile.value && lastReadLog.parsed) {
+        const profileData = selectedProfile.value.data;
+        const defaultEndian = profileData.protocol_summary?.default_endian || 'ABCD';
+        
+        // 获取当前请求的功能码上下文 (兼容不同字段名)
+        const parsed = lastReadLog.parsed as any;
+        const currentFC = parsed.functionCode || parsed.fc || 0;
+        
+        // 查找是否是新数据点起点
+        matchedReg = profileData.registers.find((r: any) => getModbusOffset(r.addr, currentFC, useBase1.value) === currentPhysicalAddr);
+        
+        // 检查是否是跟随位
+        const parentReg = profileData.registers.find((r: any) => {
+          const normAddr = getModbusOffset(r.addr, currentFC, useBase1.value);
+          return currentPhysicalAddr > normAddr && currentPhysicalAddr < (normAddr + (r.count || 1));
+        });
+
+        if (matchedReg) {
+          const parsedValue = parseAutoValue(matchedReg, allVals, index, defaultEndian);
+          pendingSummary = {
+            type: 'summary',
+            text: `${matchedReg.name} == ${parsedValue}`,
+            triggerAddr: (matchedReg.addr !== undefined ? getModbusOffset(matchedReg.addr, currentFC, useBase1.value) : currentPhysicalAddr) + (matchedReg.count || 1) - 1
+          };
+        } else if (parentReg) {
+          isFollower = true;
+        }
+      }
+
+      // 压入原始数据行
       results.push({
+        type: 'data',
         index: index + 1,
         address: displayAddr,
         value: val,
         decStr: val.toString(),
         hexStr: '0x' + val.toString(16).toUpperCase().padStart(4, '0'),
-        binStr: formatBin(val)
+        binStr: formatBin(val),
+        isFollower
       });
+
+      // 检查并在末尾插入总结行
+      if (pendingSummary && currentPhysicalAddr === pendingSummary.triggerAddr) {
+        results.push(pendingSummary);
+        pendingSummary = null;
+      }
     });
   }
   
-  // 处理线圈 (01, 02)
+  // 处理线圈/离散输入 (01, 02)
   if (lastReadLog.parsed.coils) {
-     lastReadLog.parsed.coils.forEach((val: boolean, index: number) => {
+    const allCoils = lastReadLog.parsed.coils;
+    // 关键修正：限制显示数量
+    const displayCoils = requestedQuantity > 0 ? allCoils.slice(0, requestedQuantity) : allCoils;
+    
+    let pendingSummary: any = null;
+
+    displayCoils.forEach((val: boolean, index: number) => {
       const currentPhysicalAddr = physicalStartAddr + index;
       const displayAddr = useBase1.value ? currentPhysicalAddr + 1 : currentPhysicalAddr;
       
+      let matchedReg = null;
+      let isFollower = false;
+
+      // 自动模式逻辑
+      if (runMode.value === 'auto' && selectedProfile.value && lastReadLog.parsed) {
+        const profileData = selectedProfile.value.data;
+        const parsed = lastReadLog.parsed as any;
+        const currentFC = parsed.functionCode || parsed.fc || 0;
+        
+        // 查找匹配
+        matchedReg = profileData.registers.find((r: any) => getModbusOffset(r.addr || 0, currentFC, useBase1.value) === currentPhysicalAddr);
+        
+        // 线圈通常 count 为 1，如果不为 1 处理跟随逻辑
+        const parentReg = profileData.registers.find((r: any) => {
+          const normAddr = getModbusOffset(r.addr || 0, currentFC, useBase1.value);
+          return currentPhysicalAddr > normAddr && currentPhysicalAddr < (normAddr + (r.count || 1));
+        });
+
+        if (matchedReg) {
+          const parsedValue = parseAutoValue(matchedReg, allCoils, index);
+          pendingSummary = {
+            type: 'summary',
+            text: `${matchedReg.name} == ${parsedValue}`,
+            triggerAddr: (matchedReg.addr !== undefined ? getModbusOffset(matchedReg.addr, currentFC, useBase1.value) : currentPhysicalAddr) + (matchedReg.count || 1) - 1
+          };
+        } else if (parentReg) {
+          isFollower = true;
+        }
+      }
+
       const strVal = val ? '1' : '0';
       results.push({
+        type: 'data',
         index: index + 1,
         address: displayAddr,
         value: val ? 1 : 0,
         decStr: strVal,
         hexStr: val ? 'ON' : 'OFF',
-        binStr: strVal
+        binStr: strVal,
+        isFollower
       });
+
+      if (pendingSummary && currentPhysicalAddr === pendingSummary.triggerAddr) {
+        results.push(pendingSummary);
+        pendingSummary = null;
+      }
     });
   }
 
@@ -425,10 +710,36 @@ const latestReadResults = computed(() => {
     <div class="panel-body">
       <!-- 第二行：Modbus 命令 -->
       <section class="panel-section command-section">
-        <h2 class="section-title">
-          <span class="icon">📡</span>
-          Modbus RTU 命令
-        </h2>
+        <div class="section-header-row">
+          <h2 class="section-title">
+            <span class="icon">📡</span>
+            Modbus RTU 命令
+            
+            <div class="mode-switch-simple">
+              <!-- 新增：选择点表按钮 -->
+              <button 
+                v-if="runMode === 'auto'"
+                class="btn-text-action" 
+                @click="isProfilePickerShow = true"
+                style="margin-right: 12px;"
+              >
+                {{ selectedProfile ? `🗂️ ${selectedProfile.data.protocol_summary.model}` : '📂 请选择点表...' }}
+              </button>
+
+              <span 
+                class="mode-opt" 
+                :class="{ active: runMode === 'manual' }"
+                @click="runMode = 'manual'"
+              >手动</span>
+              <span class="sep">|</span>
+              <span 
+                class="mode-opt" 
+                :class="{ active: runMode === 'auto' }"
+                @click="runMode = 'auto'"
+              >自动</span>
+            </div>
+          </h2>
+        </div>
         
         <div class="command-form-horizontal">
           <div class="form-row">
@@ -437,10 +748,15 @@ const latestReadResults = computed(() => {
               <input type="number" v-model="slaveAddress" min="1" max="247" />
             </div>
             
-            <div class="form-group grow">
+            <div class="form-group">
               <label>功能码</label>
-              <select v-model="functionCode">
-                <option v-for="opt in functionCodeOptions" :key="opt.value" :value="opt.value">
+              <select 
+                v-model="functionCode" 
+                class="function-code-select"
+                :disabled="runMode === 'auto' && !selectedRegisterName"
+              >
+                <option v-if="availableFunctionCodeOptions.length === 0" value="">-- 请先选择寄存器 --</option>
+                <option v-for="opt in availableFunctionCodeOptions" :key="opt.value" :value="opt.value">
                   {{ opt.label }}
                 </option>
               </select>
@@ -448,38 +764,68 @@ const latestReadResults = computed(() => {
 
             <div class="form-group">
               <div class="label-with-switch">
-                <label>起始地址 (Dec)</label>
+                <!-- 自动模式下标题改为：寄存器名称 -->
+                <label>{{ runMode === 'auto' ? '寄存器名称' : '起始地址 (Dec)' }}</label>
+                
                 <div class="base-switch">
                   <button 
                     :class="{ active: !useBase1 }" 
                     @click="setBase(false)"
-                    title="从 0 开始计数"
+                    title="从 0 开始计数 (Base 0)"
                   >Base 0</button>
                   <button 
                     :class="{ active: useBase1 }" 
                     @click="setBase(true)"
-                    title="从 1 开始计数"
+                    title="从 1 开始计数 (Base 1 / PLC)"
                   >Base 1</button>
                 </div>
               </div>
+              
               <div class="input-combined">
+                <!-- 自动模式：下拉选择 -->
+                <select 
+                  v-if="runMode === 'auto'" 
+                  v-model="selectedRegisterName"
+                  class="dec-input-large"
+                  style="width: 200px;"
+                >
+                  <option disabled value="">-- 请选择寄存器 --</option>
+                  <option 
+                    v-for="reg in selectedProfile?.data.registers" 
+                    :key="reg.name" 
+                    :value="reg.name"
+                  >
+                    {{ reg.name }} {{ reg.description ? `(${reg.description})` : '' }}
+                  </option>
+                </select>
+
+                <!-- 手动模式：数字输入 -->
                 <input 
+                  v-else
                   type="number" 
                   v-model="startAddress" 
                   :min="useBase1 ? 1 : 0" 
                   max="65535" 
                   class="dec-input-large" 
                 />
+
                 <div class="plc-address-display">
                   <span class="label">PLC地址</span>
-                  <span class="value">{{ plcAddress }}</span>
+                  <!-- 自动模式显示点表定义的 addr，手动模式显示计算后的 addr -->
+                  <span class="value">{{ runMode === 'auto' && currentRegisterObj ? currentRegisterObj.addr : plcAddress }}</span>
                 </div>
               </div>
             </div>
             
             <div v-if="isReadOperation" class="form-group">
                 <label>寄存器数量</label>
-                <input type="number" v-model="quantity" min="1" max="125" />
+                <input 
+                  type="number" 
+                  v-model="quantity" 
+                  min="1" 
+                  max="125" 
+                  :disabled="runMode === 'auto'"
+                />
             </div>
             
             <div v-if="isSingleWrite" class="form-group">
@@ -637,15 +983,36 @@ const latestReadResults = computed(() => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="item in latestReadResults" :key="item.index">
-                  <td class="col-index">{{ item.index }}</td>
-                  <td class="col-addr">{{ item.address }}</td>
-                  <td class="col-value centered">
-                    <span v-if="displayFormat === 'dec'" class="val-dec">{{ item.decStr }}</span>
-                    <span v-else-if="displayFormat === 'hex'" class="val-hex">{{ item.hexStr }}</span>
-                    <span v-else-if="displayFormat === 'bin'" class="val-bin">{{ item.binStr }}</span>
-                  </td>
-                </tr>
+                <template v-for="(item, idx) in latestReadResults" :key="idx">
+                  <!-- 正常数据行 -->
+                  <tr v-if="item.type === 'data' || !item.type">
+                    <td class="col-index">{{ item.index }}</td>
+                    <td class="col-addr">{{ item.address }}</td>
+                    <td class="col-value centered">
+                      <div class="value-container">
+                        <div class="raw-value">
+                          <span v-if="displayFormat === 'dec'" class="val-dec">{{ item.decStr }}</span>
+                          <span v-else-if="displayFormat === 'hex'" class="val-hex">{{ item.hexStr }}</span>
+                          <span v-else-if="displayFormat === 'bin'" class="val-bin">{{ item.binStr }}</span>
+                        </div>
+                        <div v-if="runMode === 'auto' && item.isFollower" class="auto-parsed-info">
+                          <span class="reg-follower-tag">↑ 延续位</span>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                  
+                  <!-- 解析结果总结行 -->
+                  <tr v-else-if="item.type === 'summary'" class="summary-row">
+                    <td colspan="3">
+                      <div class="summary-content">
+                        <span class="summary-icon">💡</span>
+                        <span class="summary-text">{{ item.text }}</span>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+
                 <tr v-if="latestReadResults.length === 0">
                   <td colspan="3" class="table-empty">
                     等待读取数据...
@@ -655,6 +1022,34 @@ const latestReadResults = computed(() => {
             </table>
           </div>
         </section>
+    </div>
+  </div>
+
+    <!-- 点表选择弹窗 (简易版) -->
+    <div v-if="isProfilePickerShow" class="modal-overlay" @click.self="isProfilePickerShow = false">
+      <div class="modal-content profile-picker">
+        <div class="modal-header">
+          <h3>选择点表设备</h3>
+          <button class="btn-close" @click="isProfilePickerShow = false">×</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="profileStore.profiles.length === 0" class="empty-state">
+            暂无点表库，请前往“点表管理”创建。
+          </div>
+          <div 
+            v-for="p in profileStore.profiles" 
+            :key="p.id" 
+            class="profile-item"
+            :class="{ active: selectedProfileId === p.id }"
+            @click="selectedProfileId = p.id; isProfilePickerShow = false"
+          >
+            <div class="p-icon">📦</div>
+            <div class="p-info">
+              <div class="p-title">{{ p.data.protocol_summary.manufacturer }} - {{ p.data.protocol_summary.model }}</div>
+              <div class="p-sub">{{ p.data.protocol_summary.series }} | {{ (p.data.registers || []).length }} 个节点</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -796,8 +1191,13 @@ const latestReadResults = computed(() => {
 }
 
 .form-group.grow {
-  flex: 1;
-  min-width: 150px;
+  flex: 0.8; /* 降低权重，让报文预览占更多空间 */
+  min-width: 120px;
+  max-width: 280px; /* 进一步缩短写入值框 */
+}
+
+.function-code-select {
+  width: 200px; /* 进一步缩短，为后续控件腾出空间 */
 }
 
 .form-group label {
@@ -880,8 +1280,8 @@ const latestReadResults = computed(() => {
   display: flex;
   align-items: flex-end;
   gap: 1rem;
-  flex: 1;
-  min-width: 300px;
+  flex: 1.5; /* 增加权重，报文预览更重要 */
+  min-width: 280px; /* 降低最小宽度要求，防止推挤 */
 }
 
 .preview-box {
@@ -1046,15 +1446,17 @@ const latestReadResults = computed(() => {
 }
 
 .btn-send {
-  padding: 0.7rem 2rem;
+  padding: 0 1.5rem;
+  height: 2.4rem;
+  border-radius: 6px;
+  border: none;
   background: var(--color-primary);
   color: white;
-  border: none;
-  border-radius: 6px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  height: 2.4rem;
+  transition: all 0.2s;
+  flex-shrink: 0; /* 绝对禁止按钮被挤压 */
   display: flex;
   align-items: center;
 }
@@ -1306,5 +1708,227 @@ const latestReadResults = computed(() => {
   .dec-input-large {
     width: 100%;
   }
+}
+
+
+
+/* 强制对齐命令栏高度 */
+.command-form-horizontal input,
+.command-form-horizontal select,
+.plc-address-display,
+.preview-value {
+  height: 2.4rem; /* 统一高度 */
+  font-size: 0.9rem; /* 统一字号 */
+  line-height: normal;
+  box-sizing: border-box;
+  white-space: nowrap; /* 禁止换行 */
+}
+
+/* 强制对齐标题栏高度 & 统一字号 */
+.form-group label,
+.preview-label,
+.label-with-switch {
+  display: flex !important;
+  align-items: center;
+  min-height: 1.6rem; /* 关键：强制标签行等高 */
+  font-size: 0.85rem !important; /* 关键：统一字号 */
+  color: var(--color-text-secondary);
+  margin-bottom: 0; /* 消除额外间距干扰 */
+}
+
+/* 特殊处理：label-with-switch 内部的 label 不需要再撑开高度，防止双重叠加 */
+.label-with-switch label {
+  min-height: auto;
+}
+
+.mode-switch-simple {
+  margin-left: auto; /* 靠右对齐 */
+  display: flex;
+  align-items: center;
+  font-size: 0.85rem;
+  font-weight: normal;
+  background: var(--color-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  gap: 6px;
+}
+
+.mode-switch-simple .mode-opt {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: var(--color-text-secondary);
+  transition: all 0.2s;
+}
+
+.mode-switch-simple .mode-opt.active {
+  background: var(--color-primary);
+  color: white;
+  font-weight: 500;
+}
+
+.mode-switch-simple .sep {
+  color: var(--color-border);
+  font-size: 0.8rem;
+}
+
+.btn-text-action {
+  background: transparent;
+  border: 1px dashed var(--color-primary);
+  color: var(--color-primary);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-text-action:hover {
+  background: rgba(102, 126, 234, 0.1);
+  border-style: solid;
+}
+
+/* 弹窗样式 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10000;
+}
+
+.modal-content.profile-picker {
+  background: var(--color-surface);
+  width: 500px;
+  max-height: 80vh;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+}
+
+.modal-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  border: none;
+  padding: 0;
+  font-size: 1.1rem;
+}
+
+.btn-close {
+  background: transparent;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.modal-body {
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.profile-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 0.5rem;
+  border: 1px solid transparent;
+}
+
+.profile-item:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
+}
+
+.profile-item.active {
+  background: rgba(102, 126, 234, 0.1);
+  border-color: var(--color-primary);
+}
+
+.p-icon { font-size: 1.5rem; }
+.p-title { font-weight: 600; color: var(--color-text); }
+.p-sub { font-size: 0.8rem; color: var(--color-text-secondary); margin-top: 2px; }
+
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  color: var(--color-text-secondary);
+}
+.auto-parsed-info {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.reg-name-tag {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  background: var(--color-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.reg-follower-tag {
+  font-size: 0.7rem;
+  color: var(--color-text-secondary);
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.value-container {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+/* 总结行样式 */
+.summary-row {
+  background: rgba(var(--color-primary-rgb), 0.05);
+}
+
+.summary-row td {
+  padding: 6px 12px !important;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.summary-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+}
+
+.summary-icon {
+  font-size: 1rem;
+}
+
+.summary-text {
+  font-weight: 600;
+  color: var(--color-primary);
+  font-size: 0.95rem;
+  letter-spacing: 0.5px;
 }
 </style>

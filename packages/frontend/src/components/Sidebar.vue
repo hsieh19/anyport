@@ -9,6 +9,7 @@ const activeTab = ref('modbus');
 
 const menuItems = [
   { id: 'modbus', label: 'Modbus RTU', icon: '📡' },
+  { id: 'profiles', label: '点表库', icon: '📚' },
   { id: 'dlt645', label: 'DL/T 645', icon: '⚡', disabled: true },
   { id: 'mqtt', label: 'MQTT Client', icon: '☁️', disabled: true },
   { id: 'settings', label: '设置', icon: '⚙️', disabled: true },
