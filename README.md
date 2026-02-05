@@ -42,6 +42,44 @@ graph LR
     ESP32 --RS485--> Device[现场设备]
 ```
 
+## 🏗️ 项目架构
+
+Anyport 采用分层解耦的架构设计，确保了通讯协议与传输介质的灵活组合。
+
+### 核心分层
+
+1.  **Transport (传输层)**: 负责物理数据的收发（如 Web Serial API, WebSocket, MQTT）。
+2.  **Protocol Adapter (协议层)**: 负责应用层协议的封装与解析（如 Modbus RTU, DL/T 645）。
+3.  **Application Logic (应用层)**: 处理 UI 交互、数据存储 (IndexedDB) 和状态管理 (Pinia)。
+
+### 技术栈
+
+- **Frontend**: Vue 3 (Composition API) + Vite + TypeScript
+- **State**: Pinia
+- **Database**: IndexedDB (使用 Dexie.js)
+- **Communications**: Web Serial API
+- **Styling**: Vanilla CSS (CSS Variables)
+
+### 模块结构
+
+```
+anyport/
+├── packages/
+│   ├── shared/                 # 跨项目共享的类型定义与工具
+│   └── frontend/               # Vue 3 前端应用
+│       └── src/
+│           ├── transports/     # 物理传输层：负责底层字节流收发 (WebSerial, 预留 MQTT)
+│           ├── protocols/      # 协议编解码层：实现不同工业协议的封装与解析 (Modbus, DL/T 645)
+│           ├── services/       # 业务逻辑服务：处理配置存取、复杂数据过滤等逻辑
+│           ├── stores/         # 状态管理 (Pinia)：维护全局设备连接状态、读取的数据快照
+│           ├── views/          # 页面视图：轮廓库管理页面、移动端专用视图
+│           ├── layouts/        # 分端布局：Desktop (分栏) 与 Mobile (标签页) 布局骨架
+│           ├── components/     # UI 业务组件：协议配置面板、实时通讯日志盒
+│           ├── utils/          # 工具函数：IndexedDB (Dexie) 初始化、CRC 校验等
+│           ├── types/          # 前端 TypeScript 类型定义
+│           └── assets/         # 静态资源 (图标、样式变量、主字体)
+```
+
 ## 📦 项目结构
 
 本项目采用 Monorepo 结构管理：
