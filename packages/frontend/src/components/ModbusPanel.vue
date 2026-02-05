@@ -19,8 +19,10 @@ onMounted(() => {
 
 // 辅助函数：将多种格式的 func_code 转换为数字数组
 function normalizeFuncCodes(input: any): number[] {
+  if (!input) return [];
   const arr = Array.isArray(input) ? input : [input];
   return arr.map(item => {
+    if (item === null || item === undefined) return NaN;
     if (typeof item === 'string') {
       // 处理 "0x03" 或 "3" 格式
       return item.startsWith('0x') ? parseInt(item, 16) : parseInt(item, 10);
@@ -36,18 +38,66 @@ function normalizeFuncCodes(input: any): number[] {
  * 1. 如果是 Base 0 (base1 = false)，则视为原始偏移量不做任何处理。
  * 2. 如果是 Base 1 (base1 = true)，则尝试根据功能码判定是否属于 PLC 地址段并减去基准。
  */
-function getModbusOffset(addr: number, fc: number, base1: boolean): number {
-  if (!base1) return addr; // Base 0 模式下，永远不自动减去基准值
+// --- 写入值转换逻辑 ---
 
-  const fcNum = Number(fc);
+/**
+ * 将输入值根据类型转换成 Modbus 寄存器数组 (16位)
+ */
+function encodeValue(valStr: string, dataType: string, endian: string = 'ABCD'): number[] {
+  const val = parseFloat(valStr);
+  if (isNaN(val)) return [];
+
+  // 判断是否是 32 位类型 (需占用 2 个寄存器)
+  const is32Bit = ['float32', 'int32', 'uint32'].includes(dataType);
+  
+  if (!is32Bit) {
+    // 对于布尔类型，Modbus 协议通常 0x0000 为 OFF，0xFF00 为 ON
+    if (dataType === 'coil' || dataType === 'discrete_input') {
+      return [val === 0 ? 0x0000 : 0xFF00];
+    }
+    return [Math.round(val) & 0xFFFF];
+  }
+
+  // 处理 32 位编码
+  const buffer = new ArrayBuffer(4);
+  const view = new DataView(buffer);
+
+  if (dataType === 'float32') {
+    view.setFloat32(0, val, false); // 原生大端
+  } else if (dataType === 'int32') {
+    view.setInt32(0, Math.round(val), false);
+  } else { // uint32
+    view.setUint32(0, Math.round(val), false);
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let reordered: number[] = [];
+  
+  // 字节序处理
+  if (endian === 'CDAB') reordered = [bytes[2]!, bytes[3]!, bytes[0]!, bytes[1]!];
+  else if (endian === 'BADC') reordered = [bytes[1]!, bytes[0]!, bytes[3]!, bytes[2]!];
+  else if (endian === 'DCBA') reordered = [bytes[3]!, bytes[2]!, bytes[1]!, bytes[0]!];
+  else reordered = [bytes[0]!, bytes[1]!, bytes[2]!, bytes[3]!]; // ABCD
+
+  return [
+    (reordered[0] << 8) | reordered[1],
+    (reordered[2] << 8) | reordered[3]
+  ];
+}
+
+function getModbusOffset(addr: number | string, fc: number | string, base1: boolean): number {
+  const numAddr = typeof addr === 'string' ? parseInt(addr, 10) : addr;
+  const fcNum = typeof fc === 'string' ? parseInt(fc, 10) : fc;
+
+  if (!base1) return numAddr; // Base 0 模式下，永远不自动减去基准值
   
   // 仅在 Base 1 模式下，尝试将标准 PLC 范围地址识别为 1-based 偏移并转换
-  if (addr >= 40001 && addr <= 49999 && (fcNum === 3 || fcNum === 6 || fcNum === 16)) return addr - 40001;
-  if (addr >= 30001 && addr <= 39999 && fcNum === 4) return addr - 30001;
-  if (addr >= 10001 && addr <= 19999 && fcNum === 2) return addr - 10001;
-  if (addr >= 1 && addr <= 9999 && (fcNum === 1 || fcNum === 5 || fcNum === 15)) return addr - 1; 
+  if (numAddr >= 40001 && numAddr <= 49999 && (fcNum === 3 || fcNum === 6 || fcNum === 16)) return numAddr - 40001;
+  if (numAddr >= 30001 && numAddr <= 39999 && fcNum === 4) return numAddr - 30001;
+  if (numAddr >= 10001 && numAddr <= 19999 && fcNum === 2) return numAddr - 10001;
+  if (numAddr >= 1 && numAddr <= 9999 && (fcNum === 1 || fcNum === 5 || fcNum === 15)) return numAddr - 1; 
   
-  return addr;
+  return numAddr;
 }
 
 // --- 数据解析核心逻辑 ---
@@ -111,13 +161,27 @@ function getExtendedValue(allValues: number[], offset: number, dataType: string,
 function parseAutoValue(regObj: any, allValues: any[], offset: number, defaultEndian: string = 'ABCD'): string | null {
   if (!regObj) return null;
 
-  // 区分处理：如果是线圈类型（discrete_input/coil），值已经是 0/1 或 boolean
+  // 区分处理：线圈、字符串、或普通数值
   let val: any;
   const isCoil = regObj.data_type === 'coil' || regObj.data_type === 'discrete_input';
+  const isString = regObj.data_type === 'string';
   
   if (isCoil) {
     const rawVal = allValues[offset];
     val = (typeof rawVal === 'boolean') ? (rawVal ? 1 : 0) : rawVal;
+  } else if (isString) {
+    // --- 字符串特殊处理 ---
+    const count = regObj.count || 1;
+    let bytes: number[] = [];
+    for (let i = 0; i < count; i++) {
+       const regVal = allValues[offset + i];
+       if (regVal === undefined) break;
+       // Modbus 习惯：高字节在前，低字节在后
+       bytes.push((regVal >> 8) & 0xFF);
+       bytes.push(regVal & 0xFF);
+    }
+    // 转为字符串并去除末尾的空字符 (\0)
+    val = String.fromCharCode(...bytes).replace(/\u0000/g, '').trim();
   } else {
     // 优先使用点表定义的字节序，否则使用点表全局默认字节序
     const endian = regObj.endian || defaultEndian || 'ABCD';
@@ -137,8 +201,8 @@ function parseAutoValue(regObj: any, allValues: any[], offset: number, defaultEn
     if (regObj.mapping[hexKeyLower] !== undefined) return regObj.mapping[hexKeyLower];
   }
 
-  // 2. Scale 缩放 (仅对非线圈类型)
-  if (!isCoil && regObj.scale !== undefined) {
+  // 2. Scale 缩放 (仅对非线圈和非字符串类型)
+  if (!isCoil && !isString && regObj.scale !== undefined) {
     val = (Number(val) * regObj.scale).toFixed(3);
     val = parseFloat(val); // 消除多余 0
   }
@@ -245,32 +309,198 @@ async function toggleConnection() {
   }
 }
 
-// 发送命令
-async function sendCommand() {
-  // 如果是 Base 1 模式，发出的物理地址需要 -1 (工业调试工具常用逻辑)
-  // 例如：用户输入起始地址 1，Base 1 模式下，实际报文发出的地址是 0
+// --- 写入确认逻辑 ---
+const isWriteConfirmShow = ref(false);
+const pendingWriteInfo = ref({
+  regName: '',
+  address: 0,
+  newValue: '',
+  oldValue: '等待读取...',
+  type: 'data'
+});
+
+// --- 通信反馈反馈 (Toast) ---
+const toast = ref({
+  show: false,
+  message: '',
+  type: 'success' as 'success' | 'error' | 'info'
+});
+let toastTimer: any = null;
+
+function showToast(msg: string, type: 'success' | 'error' | 'info' = 'success') {
+  if (toastTimer) clearTimeout(toastTimer);
+  toast.value = { show: true, message: msg, type };
+  toastTimer = setTimeout(() => {
+    toast.value.show = false;
+  }, 3000);
+}
+
+// 记录最后一次发送的上下文，用于匹配响应
+const lastSentContext = ref<{
+  fc: number;
+  addr: number;
+  time: number;
+} | null>(null);
+
+// 监听日志，捕获响应结果
+watch(() => deviceStore.logs.length, () => {
+  const latestLog = deviceStore.logs[0];
+  if (!latestLog || latestLog.direction !== 'rx' || !lastSentContext.value) return;
+
+  // 检查是否是针对最后一次发送的响应 (时间在 2s 内)
+  const now = Date.now();
+  if (now - lastSentContext.value.time > 2000) return;
+
+  const hexs = latestLog.hex.split(' ');
+  const resFCHex = hexs[1] || '00';
+  const resFC = parseInt(resFCHex, 16);
+  const sentFC = lastSentContext.value.fc;
+
+  // 1. 正常响应匹配
+  if (resFC === sentFC) {
+    showToast(`指令执行成功 (FC ${sentFC.toString(16).toUpperCase()})`, 'success');
+    lastSentContext.value = null; // 消费掉
+  } 
+  // 2. 异常响应报文 (FC + 0x80)
+  else if (resFC === sentFC + 0x80) {
+    const errorCode = hexs[2] || '00';
+    const errorMap: Record<string, string> = {
+      '01': '非法功能代码',
+      '02': '非法数据地址',
+      '03': '非法数据值',
+      '04': '从站设备故障',
+      '05': '确认后无法执行',
+      '06': '从站忙',
+    };
+    showToast(`设备返回异常: ${errorMap[errorCode] || '未知错误'}(0x${errorCode})`, 'error');
+    lastSentContext.value = null;
+  }
+});
+
+// 真正的执行写入逻辑 (由弹窗确认后调用)
+async function executeActualWrite() {
+  isWriteConfirmShow.value = false;
+  const reg = currentRegisterObj.value;
+
+  // 1. 自动解锁逻辑
+  if (runMode.value === 'auto' && reg?.unlock_required && selectedProfile.value) {
+    const unlockCfg = reg.unlock_required;
+    const unlockTargetReg = selectedProfile.value.data.registers.find((r: any) => r.name === unlockCfg.target);
+    if (unlockTargetReg) {
+      console.log(`[Modbus] 正在自动解锁: ${unlockCfg.target}`);
+      const unlockRawVal = typeof unlockCfg.value === 'string' && unlockCfg.value.startsWith('0x') ? parseInt(unlockCfg.value, 16) : Number(unlockCfg.value);
+      await deviceStore.sendCommand({
+        protocol: ProtocolType.MODBUS_RTU,
+        slaveAddress: slaveAddress.value,
+        functionCode: ModbusFunctionCode.WRITE_SINGLE_REGISTER,
+        startAddress: getModbusOffset(String(unlockTargetReg.addr || 0), String(ModbusFunctionCode.WRITE_SINGLE_REGISTER), useBase1.value),
+        values: [unlockRawVal]
+      });
+      let delayMs = 200;
+      if (unlockCfg.timeout) {
+         const match = unlockCfg.timeout.match(/(\d+)(ms|s)/);
+         if (match && match[1]) {
+           delayMs = match[2] === 's' ? parseInt(match[1]) * 1000 : parseInt(match[1]);
+         }
+      }
+      await new Promise(resolve => setTimeout(resolve, Math.min(delayMs, 2000)));
+    }
+  }
+
   const physicalAddress = useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value;
+  
+  // 记录上下文
+  lastSentContext.value = {
+    fc: functionCode.value,
+    addr: startAddress.value,
+    time: Date.now()
+  };
 
   const command: ModbusRtuCommand = {
     protocol: ProtocolType.MODBUS_RTU,
     slaveAddress: slaveAddress.value,
     functionCode: functionCode.value,
     startAddress: physicalAddress,
-    quantity: isReadOperation.value ? quantity.value : undefined,
+    quantity: functionCode.value === ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS ? quantity.value : undefined,
     values: getWriteValues()
   };
 
   try {
     await deviceStore.sendCommand(command);
   } catch (error) {
-    console.error('发送失败:', error);
+    showToast('报文发送失败', 'error');
+    console.error('最终下发失败:', error);
+  }
+}
+
+// 发送命令 (入口函数)
+async function sendCommand() {
+  const isRead = isReadOperation.value;
+  const reg = currentRegisterObj.value;
+
+  if (isRead) {
+    const physicalAddress = useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value;
+    lastSentContext.value = {
+      fc: functionCode.value,
+      addr: startAddress.value,
+      time: Date.now()
+    };
+    await deviceStore.sendCommand({
+      protocol: ProtocolType.MODBUS_RTU,
+      slaveAddress: slaveAddress.value,
+      functionCode: functionCode.value,
+      startAddress: physicalAddress,
+      quantity: quantity.value
+    });
+    return;
+  }
+
+  // 写入操作保持之前的确认弹窗逻辑
+  const readFC = [ModbusFunctionCode.WRITE_SINGLE_COIL, ModbusFunctionCode.WRITE_MULTIPLE_COILS].includes(functionCode.value)
+    ? ModbusFunctionCode.READ_COILS
+    : ModbusFunctionCode.READ_HOLDING_REGISTERS;
+
+  pendingWriteInfo.value = {
+    regName: reg ? reg.name : '未知寄存器',
+    address: startAddress.value,
+    newValue: isSingleWrite.value ? String(writeValue.value) : writeValues.value,
+    oldValue: '读取中...',
+    type: reg?.data_type || 'int16'
+  };
+  
+  isWriteConfirmShow.value = true;
+
+  try {
+    await deviceStore.sendCommand({
+      protocol: ProtocolType.MODBUS_RTU,
+      slaveAddress: slaveAddress.value,
+      functionCode: readFC,
+      startAddress: useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value,
+      quantity: (reg && ['float32', 'int32', 'uint32'].includes(reg.data_type)) ? 2 : (reg?.count || 1)
+    });
+    setTimeout(() => {
+      const lastRes = latestReadResults.value.find(r => r.type === 'summary');
+      pendingWriteInfo.value.oldValue = (lastRes && (lastRes as any).text) ? (lastRes as any).text : '无法解析';
+    }, 600);
+  } catch (err) {
+    pendingWriteInfo.value.oldValue = '读取失败';
   }
 }
 
 // 解析写入值
 function getWriteValues(): number[] | undefined {
   if (isReadOperation.value) return undefined;
+  
+  const reg = currentRegisterObj.value;
 
+  // 场景 1: 自动模式下的智能转换
+  if (runMode.value === 'auto' && reg) {
+    const valStr = isSingleWrite.value ? String(writeValue.value) : writeValues.value.split(',')[0];
+    const defaultEndian = selectedProfile.value?.data.protocol_summary.default_endian || 'ABCD';
+    return encodeValue(valStr, reg.data_type || 'uint16', reg.endian || defaultEndian);
+  }
+
+  // 场景 2: 手动模式
   if (isSingleWrite.value) {
     return [writeValue.value];
   }
@@ -364,6 +594,15 @@ watch(selectedRegisterName, updateAutoAddress);
 
 // 监听 Base 开关，实时重算地址 (确保 useBase1 已定义)
 watch(useBase1, updateAutoAddress);
+
+// 监听多值写入的变化，自动同步数量字段
+watch(writeValues, (newVal) => {
+  const isMultiWrite = [ModbusFunctionCode.WRITE_MULTIPLE_COILS, ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS].includes(functionCode.value);
+  if (isMultiWrite) {
+    const vals = newVal.split(',').filter(s => s.trim() !== '');
+    quantity.value = vals.length;
+  }
+});
 
 // 计算完整的 RTU 报文预览
 const fullRawFrame = computed(() => {
@@ -787,7 +1026,6 @@ const latestReadResults = computed(() => {
                   v-if="runMode === 'auto'" 
                   v-model="selectedRegisterName"
                   class="dec-input-large"
-                  style="width: 200px;"
                 >
                   <option disabled value="">-- 请选择寄存器 --</option>
                   <option 
@@ -817,20 +1055,33 @@ const latestReadResults = computed(() => {
               </div>
             </div>
             
-            <div v-if="isReadOperation" class="form-group">
+            <div v-if="isReadOperation || !isSingleWrite" class="form-group">
                 <label>寄存器数量</label>
                 <input 
                   type="number" 
                   v-model="quantity" 
                   min="1" 
                   max="125" 
-                  :disabled="runMode === 'auto'"
+                  :disabled="runMode === 'auto' || !isReadOperation"
+                  :title="!isReadOperation ? '在写多个寄存器模式下，数量自动由写入值的个数决定' : ''"
                 />
             </div>
             
             <div v-if="isSingleWrite" class="form-group">
                 <label>写入值</label>
-                <input type="number" v-model="writeValue" min="0" max="65535" />
+                <!-- 场景 1: 自动模式且有点表 Mapping -->
+                <select 
+                  v-if="runMode === 'auto' && currentRegisterObj?.mapping" 
+                  v-model.number="writeValue"
+                  class="mapping-select"
+                >
+                  <option v-for="(label, val) in currentRegisterObj.mapping" :key="val" :value="Number(val)">
+                    {{ label }} ({{ val }})
+                  </option>
+                </select>
+
+                <!-- 场景 2: 手动模式或无 Mapping -->
+                <input v-else type="number" v-model="writeValue" min="0" max="65535" />
             </div>
             
             <div v-if="!isReadOperation && !isSingleWrite" class="form-group grow">
@@ -1022,8 +1273,8 @@ const latestReadResults = computed(() => {
             </table>
           </div>
         </section>
-    </div>
-  </div>
+      </div> <!-- closes monitor-grid -->
+    </div> <!-- closes panel-body -->
 
     <!-- 点表选择弹窗 (简易版) -->
     <div v-if="isProfilePickerShow" class="modal-overlay" @click.self="isProfilePickerShow = false">
@@ -1052,6 +1303,62 @@ const latestReadResults = computed(() => {
         </div>
       </div>
     </div>
+
+    <!-- 写入二次确认弹窗 -->
+    <div v-if="isWriteConfirmShow" class="modal-overlay" @click.self="isWriteConfirmShow = false">
+      <div class="modal-content confirm-modal">
+        <div class="modal-header warning">
+          <h3>⚠️ 操作安全确认 (Write Confirm)</h3>
+          <button class="btn-close" @click="isWriteConfirmShow = false">×</button>
+        </div>
+        <div class="modal-body write-preview-body">
+          <div class="confirm-message">
+            您正在对设备从站 <strong>{{ slaveAddress }}</strong> 执行写入操作。请仔细核对以下参数：
+          </div>
+          
+          <div class="write-info-grid">
+            <div class="info-item">
+              <label>目标寄存器</label>
+              <div class="v">{{ pendingWriteInfo.regName }}</div>
+            </div>
+            <div class="info-item">
+              <label>物理地址</label>
+              <div class="v">{{ pendingWriteInfo.address }} (Dec)</div>
+            </div>
+          </div>
+
+          <div class="value-comparison">
+            <div class="val-box old">
+              <div class="box-label">当前设备值 (Read)</div>
+              <div class="box-val">{{ pendingWriteInfo.oldValue }}</div>
+            </div>
+            <div class="arrow">➡️</div>
+            <div class="val-box new">
+              <div class="box-label">计划写入值 (New)</div>
+              <div class="box-val highlight">{{ pendingWriteInfo.newValue }}</div>
+            </div>
+          </div>
+
+          <div class="confirm-warning">
+            ⚠️ 警告：写入错误参数可能导致设备运行异常或硬件损坏。
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="isWriteConfirmShow = false">取消操作</button>
+          <button class="btn-execute" @click="executeActualWrite">确认下发指令</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 浮动通知 Toast (移至根目录，确保始终显示) -->
+    <Transition name="toast">
+      <div v-if="toast.show" class="toast-notification" :class="toast.type">
+        <span class="toast-icon">
+          {{ toast.type === 'success' ? '✅' : toast.type === 'error' ? '❌' : 'ℹ️' }}
+        </span>
+        <span class="toast-msg">{{ toast.message }}</span>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -1180,8 +1487,8 @@ const latestReadResults = computed(() => {
 .form-row {
   display: flex;
   align-items: flex-end;
-  gap: 1rem;
-  flex-wrap: wrap;
+  gap: 0.8rem;
+  flex-wrap: nowrap; /* 禁止在宽屏下换行导致剧烈跳动 */
 }
 
 .form-group {
@@ -1191,18 +1498,31 @@ const latestReadResults = computed(() => {
 }
 
 .form-group.grow {
-  flex: 0.8; /* 降低权重，让报文预览占更多空间 */
-  min-width: 120px;
-  max-width: 280px; /* 进一步缩短写入值框 */
+  width: 160px; /* 进一步固定写入值框 */
+  flex-shrink: 0;
 }
 
 .function-code-select {
-  width: 200px; /* 进一步缩短，为后续控件腾出空间 */
+  width: 170px; 
+}
+
+/* 第三列：名称/地址区，固定宽度防止推挤 */
+.form-group:nth-child(3) {
+  width: 340px; 
+  flex-shrink: 0;
+}
+
+/* 从站地址 & 寄存器数量 */
+.form-group:first-child,
+.form-group:nth-child(4) {
+  width: 85px;
+  flex-shrink: 0;
 }
 
 .form-group label {
   font-size: 0.85rem;
   color: var(--color-text-secondary);
+  white-space: nowrap; /* 禁止标题换行撑开高度 */
 }
 
 .input-combined {
@@ -1247,7 +1567,7 @@ const latestReadResults = computed(() => {
 }
 
 .dec-input-large {
-  width: 120px;
+  width: 160px; /* 寄存器名称下拉框/地址框 统一宽度 */
 }
 
 .plc-address-display {
@@ -1279,9 +1599,10 @@ const latestReadResults = computed(() => {
 .form-actions-inline {
   display: flex;
   align-items: flex-end;
-  gap: 1rem;
-  flex: 1.5; /* 增加权重，报文预览更重要 */
-  min-width: 280px; /* 降低最小宽度要求，防止推挤 */
+  gap: 0.8rem;
+  flex: 1; /* 报文预览占据剩余全部空间 */
+  min-width: 200px; 
+  flex-shrink: 1;
 }
 
 .preview-box {
@@ -1289,6 +1610,8 @@ const latestReadResults = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  min-width: 0; /* 允许内部元素收缩 */
+  overflow: hidden;
 }
 
 .preview-label {
@@ -1437,12 +1760,14 @@ const latestReadResults = computed(() => {
   border-radius: 6px;
   padding: 0.5rem 0.75rem;
   font-family: 'Consolas', monospace;
-  color: #7dd3fc; /* 专业的冰川蓝，降低视觉疲劳 */
+  color: #7dd3fc;
   font-size: 0.9rem;
   min-height: 2.4rem;
   display: flex;
   align-items: center;
   letter-spacing: 0.5px;
+  overflow-x: auto; /* 允许长报文横向滚动，不推挤按钮 */
+  white-space: nowrap;
 }
 
 .btn-send {
@@ -1930,5 +2255,166 @@ const latestReadResults = computed(() => {
   color: var(--color-primary);
   font-size: 0.95rem;
   letter-spacing: 0.5px;
+}
+.modal-header.warning {
+  background: rgba(245, 166, 35, 0.1);
+  border-bottom: 2px solid #f5a623;
+}
+
+.modal-content.confirm-modal {
+  width: 550px;
+  background: var(--color-surface);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 30px 60px rgba(0,0,0,0.7);
+}
+
+.write-preview-body {
+  padding: 1.5rem;
+}
+
+.confirm-message {
+  font-size: 0.95rem;
+  margin-bottom: 1.5rem;
+  color: var(--color-text-secondary);
+}
+
+.write-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  background: var(--color-bg);
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+}
+
+.info-item label {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  display: block;
+  margin-bottom: 4px;
+}
+.info-item .v {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--color-primary);
+}
+
+.value-comparison {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.val-box {
+  flex: 1;
+  padding: 1rem;
+  border-radius: 10px;
+  text-align: center;
+  border: 1px solid var(--color-border);
+}
+
+.val-box.old { background: rgba(255, 255, 255, 0.02); }
+.val-box.new { background: rgba(102, 126, 234, 0.05); border-color: var(--color-primary); }
+
+.box-label { font-size: 0.8rem; color: var(--color-text-secondary); margin-bottom: 8px; }
+.box-val { font-family: 'Consolas', monospace; font-size: 1.4rem; font-weight: 700; }
+.box-val.highlight { color: #facc15; }
+
+.arrow { font-size: 2rem; opacity: 0.5; }
+
+.confirm-warning {
+  padding: 10px;
+  background: rgba(245, 87, 108, 0.1);
+  color: var(--color-error);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  text-align: center;
+  border: 1px dashed var(--color-error);
+}
+
+.modal-footer {
+  padding: 1rem 1.5rem;
+  background: var(--color-bg);
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+
+.btn-cancel {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  padding: 0.6rem 1.2rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-execute {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: 0.6rem 2rem;
+  border-radius: 6px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.btn-execute:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.1);
+}
+/* Toast 通知 */
+.toast-notification {
+  position: fixed;
+  top: 2rem;
+  right: 2rem;
+  padding: 0.8rem 1.5rem;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  z-index: 99999;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.1);
+  min-width: 200px;
+}
+
+.toast-notification.success {
+  background: rgba(16, 185, 129, 0.9);
+  color: white;
+}
+
+.toast-notification.error {
+  background: rgba(239, 68, 68, 0.9);
+  color: white;
+}
+
+.toast-notification.info {
+  background: rgba(59, 130, 246, 0.9);
+  color: white;
+}
+
+.toast-icon { font-size: 1.2rem; }
+.toast-msg { font-weight: 500; font-size: 0.95rem; }
+
+/* Toast 动画 */
+.toast-enter-active, .toast-leave-active {
+  transition: all 0.4s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+
+.toast-enter-from {
+  opacity: 0;
+  transform: translateX(50px) scale(0.9);
+}
+
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(-20px) scale(0.9);
 }
 </style>
