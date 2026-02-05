@@ -214,7 +214,7 @@ function parseAutoValue(regObj: any, allValues: any[], offset: number, defaultEn
 
 // 运行模式
 type RunMode = 'manual' | 'auto';
-const runMode = ref<RunMode>('manual');
+const runMode = ref<RunMode>('auto');
 
 // 自动模式状态
 const selectedProfileId = ref<string | null>(null);
@@ -967,15 +967,15 @@ const latestReadResults = computed(() => {
 
               <span 
                 class="mode-opt" 
-                :class="{ active: runMode === 'manual' }"
-                @click="runMode = 'manual'"
-              >手动</span>
-              <span class="sep">|</span>
-              <span 
-                class="mode-opt" 
                 :class="{ active: runMode === 'auto' }"
                 @click="runMode = 'auto'"
               >自动</span>
+              <span class="sep">|</span>
+              <span 
+                class="mode-opt" 
+                :class="{ active: runMode === 'manual' }"
+                @click="runMode = 'manual'"
+              >手动</span>
             </div>
           </h2>
         </div>
@@ -1477,6 +1477,7 @@ const latestReadResults = computed(() => {
   gap: 1rem;
   flex: 1;
   min-height: 0;
+  align-items: stretch; /* 确保子项等高 */
 }
 
 /* 横向命令表单 */
@@ -1487,7 +1488,7 @@ const latestReadResults = computed(() => {
 .form-row {
   display: flex;
   align-items: flex-end;
-  gap: 0.8rem;
+  gap: 0.75rem; /* 紧凑间距 12px */
   flex-wrap: nowrap; /* 禁止在宽屏下换行导致剧烈跳动 */
 }
 
@@ -1506,9 +1507,9 @@ const latestReadResults = computed(() => {
   width: 170px; 
 }
 
-/* 第三列：名称/地址区，固定宽度防止推挤 */
+/* 第三列：名称/地址区，自适应宽度消除外边距 */
 .form-group:nth-child(3) {
-  width: 340px; 
+  width: auto; 
   flex-shrink: 0;
 }
 
@@ -1527,14 +1528,24 @@ const latestReadResults = computed(() => {
 
 .input-combined {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.4rem; /* 内部超紧凑间距 */
 }
 
 .label-with-switch {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 1rem;
+  gap: 0.4rem; /* 对应下方的 input-combined 间距 */
+}
+
+.label-with-switch label {
+  width: 180px; /* 从 140px 增加到 180px，确保“请选择寄存器”显示完整 */
+  flex-shrink: 0;
+}
+
+.address-meta-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
 .base-switch {
@@ -1567,7 +1578,7 @@ const latestReadResults = computed(() => {
 }
 
 .dec-input-large {
-  width: 160px; /* 寄存器名称下拉框/地址框 统一宽度 */
+  width: 180px; /* 同步扩宽选择框 */
 }
 
 .plc-address-display {
@@ -1798,6 +1809,7 @@ const latestReadResults = computed(() => {
   align-items: center;
   margin-bottom: 0.8rem;
   flex-shrink: 0;
+  min-height: 32px; /* 统一标题行最小高度，解决对齐问题 */
 }
 
 .log-container {
