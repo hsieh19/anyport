@@ -114,43 +114,53 @@ export class WebSerialTransport implements ITransportAdapter {
     async disconnect(): Promise<void> {
         this.isReading = false;
 
-        // 等待读取循环结束
-        if (this.readLoopPromise) {
-            try {
-                await this.readLoopPromise;
-            } catch {
-                // 忽略取消错误
-            }
-        }
-
-        // 释放读取器
+        // 1. 先取消读取器，这会让 readLoop 中的 await reader.read() 立即返回
         if (this.reader) {
             try {
                 await this.reader.cancel();
+            } catch (err) {
+                console.warn('取消读取器失败:', err);
+            }
+        }
+
+        // 2. 现在可以安全地等待读取循环结束
+        if (this.readLoopPromise) {
+            try {
+                await this.readLoopPromise;
+            } catch (err) {
+                // 忽略错误
+            }
+            this.readLoopPromise = null;
+        }
+
+        // 3. 释放读取器锁
+        if (this.reader) {
+            try {
                 this.reader.releaseLock();
-            } catch {
-                // 忽略
+            } catch (err) {
+                console.warn('释放读取器锁失败:', err);
             }
             this.reader = null;
         }
 
-        // 释放写入器
+        // 4. 释放写入器
         if (this.writer) {
             try {
+                // 写操作可能正在进行，close 会等待它完成
                 await this.writer.close();
                 this.writer.releaseLock();
-            } catch {
-                // 忽略
+            } catch (err) {
+                console.warn('关闭写入器失败:', err);
             }
             this.writer = null;
         }
 
-        // 关闭端口
+        // 5. 最后关闭端口
         if (this.port) {
             try {
                 await this.port.close();
-            } catch {
-                // 忽略
+            } catch (err) {
+                console.error('关闭串口失败:', err);
             }
             this.port = null;
         }

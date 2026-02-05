@@ -177,6 +177,7 @@ export const useDeviceStore = defineStore('device', () => {
         lastError,
         logs,
         connectionConfig,
+        adapter,
         // 方法
         connect,
         disconnect,

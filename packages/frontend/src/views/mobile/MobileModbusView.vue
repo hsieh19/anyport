@@ -16,7 +16,7 @@ const activeTab = ref<'connect' | 'control' | 'log'>('connect');
 const slaveAddress = ref(1);
 const functionCode = ref<ModbusFunctionCode>(ModbusFunctionCode.READ_HOLDING_REGISTERS);
 const startAddress = ref(0);
-const quantity = ref(10);
+const quantity = ref(1);
 const writeValue = ref(0);
 const writeValues = ref('');
 
