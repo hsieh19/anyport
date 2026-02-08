@@ -54,25 +54,23 @@ jobs:
       - name: Extract Changelog segment
         id: extract_changelog
         run: |
-          # 提取当前 tag 对应的 CHANGELOG.md 段落
           VERSION="${{ steps.get_version.outputs.VERSION }}"
-          # 去掉 'v' 前缀以匹配 CHANGELOG.md 中的格式 [1.0.1]
           VERSION_NUM="${VERSION#v}"
           
-          # 简单的 sed 脚本：匹配最近的一个版本段落
-          # 这里假设 CHANGELOG.md 格式为 ## [x.x.x]
-          sed -n "/## \[$VERSION_NUM\]/,/## \[/p" CHANGELOG.md | sed '$d' > release_notes.txt
-          echo "notes_file=release_notes.txt" >> $GITHUB_OUTPUT
+          # Create header with Docker info
+          echo "## 🐳 Docker Image" > release_body.txt
+          echo "\`docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}\`" >> release_body.txt
+          echo "" >> release_body.txt
+          echo "---" >> release_body.txt
+          echo "" >> release_body.txt
+          
+          # Extract changelog and append
+          sed -n "/## \[$VERSION_NUM\]/,/## \[/p" CHANGELOG.md | sed '$d' >> release_body.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body: |
-            ## 🐳 Docker Image
-            `docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.VERSION }}`
-            
-            ---
-            $(cat release_notes.txt)
+          body_path: release_body.txt
           draft: false
           prerelease: false
         env:
