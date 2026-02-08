@@ -39,7 +39,7 @@ watch(() => props.activeTab, () => {
           <span class="logo-icon">🔌</span>
           <div class="logo-info">
             <span class="logo-text">Anyport</span>
-            <span class="version">v1.0.1</span>
+            <span class="version">v1.0.2</span>
           </div>
         </div>
       </div>
