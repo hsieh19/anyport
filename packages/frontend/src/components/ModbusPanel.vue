@@ -1483,6 +1483,7 @@ const latestReadResults = computed(() => {
 /* 横向命令表单 */
 .command-form-horizontal {
   margin-top: 1rem;
+  overflow: visible;
 }
 
 .form-row {
@@ -1490,6 +1491,7 @@ const latestReadResults = computed(() => {
   align-items: flex-end;
   gap: 0.75rem; /* 紧凑间距 12px */
   flex-wrap: nowrap; /* 禁止在宽屏下换行导致剧烈跳动 */
+  overflow: visible;
 }
 
 .form-group {
@@ -1614,6 +1616,7 @@ const latestReadResults = computed(() => {
   flex: 1; /* 报文预览占据剩余全部空间 */
   min-width: 200px; 
   flex-shrink: 1;
+  overflow: visible;
 }
 
 .preview-box {
@@ -1622,10 +1625,10 @@ const latestReadResults = computed(() => {
   flex-direction: column;
   gap: 0.4rem;
   min-width: 0; /* 允许内部元素收缩 */
-  overflow: hidden;
 }
 
 .preview-label {
+  position: relative; /* 为悬浮窗创建定位上下文 */
   font-size: 0.8rem;
   color: var(--color-text-secondary);
   display: flex;
