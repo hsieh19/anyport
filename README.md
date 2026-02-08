@@ -87,36 +87,59 @@ anyport/
 - `packages/frontend`: 前端应用 (Vue 3 + Vite)
 - `packages/shared`: 共享类型定义和工具库
 
-## 🚀 快速开始
+## 🚀 本地运行与开发
 
 ### 前置要求
 
 - Node.js >= 18
-- pnpm (推荐) 或 npm
+- pnpm >= 8
 
-### 安装
+### 安装与运行
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/anyport.git
+git clone https://github.com/hsieh19/anyport.git
 cd anyport
 
 # 安装依赖
 pnpm install
-```
 
-### 开发
-
-```bash
-# 启动前端开发服务器
-pnpm -F @anyport/frontend dev
-# 或者在根目录（如果配置了脚本）
-npm run dev
+# 启动开发服务器
+pnpm dev
 ```
 
 ### 构建
 
 ```bash
-pnpm -r build
+pnpm build
 ```
+
+## 🐳 Docker 部署
+
+您可以直接使用预构建的镜像，或在本地构建镜像。由于前端涉及到 Web Serial API，请确保通过 **HTTPS** 或 **localhost** 访问应用，否则浏览器会禁用该 API。
+
+### 使用预构建镜像 (推荐)
+
+```bash
+# 从 GitHub Container Registry 拉取并运行
+docker run -d --name anyport -p 8080:80 ghcr.io/hsieh19/anyport:latest
+```
+
+### 本地构建镜像
+
+```bash
+# 在项目根目录下执行
+docker build -t anyport .
+
+# 运行容器
+docker run -d --name anyport -p 8080:80 anyport
+```
+
+运行后，访问 `http://localhost:8080` 即可使用。
+
+---
+
+## 📜 许可证
+
+本项目采用 [MIT](LICENSE) 许可证。
 
