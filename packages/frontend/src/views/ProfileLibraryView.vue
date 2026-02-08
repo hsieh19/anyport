@@ -285,11 +285,74 @@ function handleExport() {
 .profile-library {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 80px); /* 减去顶部导航 */
+  height: calc(100vh - 80px); /* 默认桌面端减去顶部导航 */
   max-width: 1600px;
   margin: 0 auto;
   padding: 1rem;
   gap: 1rem;
+}
+
+/* 适配桌面端布局 */
+@media (min-width: 769px) {
+  .profile-library {
+    height: calc(100vh - 80px);
+  }
+}
+
+/* 适配移动端布局 */
+@media (max-width: 768px) {
+  .profile-library {
+    height: auto;
+    min-height: 100%;
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+  
+  .library-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+    padding: 1rem;
+  }
+  
+  .actions {
+    justify-content: space-between;
+  }
+  
+  .btn-import, .btn-new {
+    flex: 1;
+    text-align: center;
+  }
+
+  .library-body {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .sidebar-tree {
+    width: 100%;
+    height: 300px; /* 固定高度或根据内容变化 */
+    flex-shrink: 0;
+  }
+
+  .editor-panel {
+    min-height: 400px;
+  }
+
+  .editor-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .editor-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .editor-actions button {
+    flex: 1;
+  }
 }
 
 .library-header {
@@ -298,14 +361,15 @@ function handleExport() {
   align-items: center;
   background: var(--color-surface);
   padding: 1rem;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
 }
 
 .library-header h2 {
   margin: 0;
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   color: var(--color-text);
+  font-weight: 600;
 }
 
 .actions {
@@ -314,13 +378,15 @@ function handleExport() {
 }
 
 .btn-import, .btn-new {
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius-md);
   font-size: 0.9rem;
+  font-weight: 500;
   cursor: pointer;
   border: 1px solid var(--color-border);
   background: var(--color-surface-hover);
   color: var(--color-text);
+  transition: all 0.2s;
 }
 
 .btn-new {
@@ -341,10 +407,11 @@ function handleExport() {
 .sidebar-tree {
   width: 300px;
   background: var(--color-surface);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .search-box {
@@ -354,8 +421,8 @@ function handleExport() {
 
 .search-box input {
   width: 100%;
-  padding: 0.5rem;
-  border-radius: 4px;
+  padding: 0.6rem;
+  border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   background: var(--color-bg);
   color: var(--color-text);
@@ -371,24 +438,23 @@ function handleExport() {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem;
+  padding: 0.6rem 0.5rem;
   cursor: pointer;
   color: var(--color-text);
   font-size: 0.9rem;
   user-select: none;
   font-weight: 500;
-  border-radius: 4px;
-  position: relative; /* 确保层级 */
+  border-radius: var(--radius-md);
+  position: relative;
   z-index: 1;
 }
 
 .tree-node-header:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-surface-hover);
 }
 
 .root-node {
   font-weight: 600;
-  background: rgba(255, 255, 255, 0.02);
 }
 
 .series-node {
@@ -410,7 +476,7 @@ function handleExport() {
 .level-1-children {
   margin-left: 0.7rem;
   padding-left: 0.5rem;
-  border-left: 1px dashed rgba(255, 255, 255, 0.1);
+  border-left: 1px dashed var(--color-border);
 }
 
 .tree-level-2 {
@@ -420,7 +486,7 @@ function handleExport() {
 .level-2-children {
   margin-left: 0.7rem;
   padding-left: 0.5rem;
-  border-left: 1px dashed rgba(255, 255, 255, 0.1);
+  border-left: 1px dashed var(--color-border);
 }
 
 .tree-item {
@@ -428,21 +494,21 @@ function handleExport() {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.5rem;
+  padding: 0.5rem;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--color-text-secondary);
   font-size: 0.85rem;
 }
 
 .tree-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-hover);
   color: var(--color-text);
 }
 
 .tree-item.active {
-  background: rgba(102, 126, 234, 0.15);
-  color: #667eea;
+  background: rgba(102, 126, 234, 0.1);
+  color: var(--color-primary);
   font-weight: 600;
 }
 
@@ -457,7 +523,7 @@ function handleExport() {
 .editor-panel {
   flex: 1;
   background: var(--color-surface);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
@@ -474,9 +540,10 @@ function handleExport() {
 }
 
 .status-text {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 600;
   color: var(--color-text);
+  word-break: break-all;
 }
 
 .editor-actions {
@@ -485,11 +552,13 @@ function handleExport() {
 }
 
 .editor-actions button {
-  padding: 0.4rem 1rem;
-  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-md);
   border: none;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
 .btn-delete {
@@ -498,7 +567,7 @@ function handleExport() {
 }
 
 .btn-export {
-  background: var(--color-surface);
+  background: var(--color-bg);
   border: 1px solid var(--color-border) !important;
   color: var(--color-text);
 }
@@ -523,7 +592,7 @@ function handleExport() {
   text-align: right;
   padding: 1rem 0;
   font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.5;
   user-select: none;
   overflow: hidden;
@@ -538,15 +607,15 @@ function handleExport() {
   flex: 1;
   width: 100%;
   padding: 1rem;
-  background: transparent; /* 背景透明，透出 wrapper 的颜色 */
+  background: transparent;
   color: #d4d4d4;
   border: none;
   resize: none;
   font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.5;
   outline: none;
-  white-space: pre; /* 保持换行 */
+  white-space: pre;
   overflow: auto;
 }
 
