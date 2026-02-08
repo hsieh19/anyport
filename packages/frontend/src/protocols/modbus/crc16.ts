@@ -48,8 +48,8 @@ export function calculateCRC16(data: Uint8Array): number {
     let crc = 0xFFFF;
 
     for (let i = 0; i < data.length; i++) {
-        const tableIndex = (crc ^ data[i]) & 0xFF;
-        crc = (crc >> 8) ^ CRC_TABLE[tableIndex];
+        const tableIndex = (crc ^ data[i]!) & 0xFF;
+        crc = (crc >> 8) ^ CRC_TABLE[tableIndex]!;
     }
 
     return crc;
@@ -79,7 +79,7 @@ export function verifyCRC16(data: Uint8Array): boolean {
     const calculatedCRC = calculateCRC16(dataWithoutCRC);
 
     // 提取帧中的 CRC（低位在前）
-    const receivedCRC = data[data.length - 2] | (data[data.length - 1] << 8);
+    const receivedCRC = data[data.length - 2]! | (data[data.length - 1]! << 8);
 
     return calculatedCRC === receivedCRC;
 }

@@ -3,7 +3,7 @@
  */
 
 import { ProtocolType } from './protocol.types';
-import { TransportType, ConnectionConfig } from './transport.types';
+import { TransportType, type ConnectionConfig } from './transport.types';
 
 /**
  * 设备状态

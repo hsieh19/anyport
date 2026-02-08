@@ -2,7 +2,6 @@
 /**
  * 专业的居中弹窗组件
  */
-import { ref } from 'vue';
 
 interface Props {
   show: boolean;

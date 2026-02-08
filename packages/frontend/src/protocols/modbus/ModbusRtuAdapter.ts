@@ -139,7 +139,7 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
                 // 打包线圈值
                 for (let i = 0; i < coilCount; i++) {
                     if (values?.[i]) {
-                        pdu[7 + Math.floor(i / 8)] |= (1 << (i % 8));
+                        pdu[7 + Math.floor(i / 8)]! |= (1 << (i % 8));
                     }
                 }
                 break;
@@ -195,8 +195,8 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
             };
         }
 
-        const slaveAddress = data[0];
-        const functionCode = data[1];
+        const slaveAddress = data[0]!;
+        const functionCode = data[1]!;
 
         // 检查是否为异常响应（功能码最高位为 1）
         if (functionCode & 0x80) {
@@ -207,7 +207,7 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
                 functionCode: functionCode & 0x7F,
                 isException: true,
                 exceptionCode: data[2],
-                error: this.getExceptionMessage(data[2]),
+                error: this.getExceptionMessage(data[2]!),
                 raw: data
             };
         }
@@ -224,11 +224,11 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
         switch (functionCode) {
             case ModbusFunctionCode.READ_COILS:
             case ModbusFunctionCode.READ_DISCRETE_INPUTS: {
-                const byteCount = data[2];
+                const byteCount = data[2]!;
                 const coils: boolean[] = [];
                 for (let i = 0; i < byteCount; i++) {
                     for (let bit = 0; bit < 8; bit++) {
-                        coils.push((data[3 + i] & (1 << bit)) !== 0);
+                        coils.push((data[3 + i]! & (1 << bit)) !== 0);
                     }
                 }
                 response.coils = coils;
@@ -237,10 +237,10 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
 
             case ModbusFunctionCode.READ_HOLDING_REGISTERS:
             case ModbusFunctionCode.READ_INPUT_REGISTERS: {
-                const byteCount = data[2];
+                const byteCount = data[2]!;
                 const registers: number[] = [];
                 for (let i = 0; i < byteCount / 2; i++) {
-                    registers.push((data[3 + i * 2] << 8) | data[4 + i * 2]);
+                    registers.push((data[3 + i * 2]! << 8) | data[4 + i * 2]!);
                 }
                 response.registers = registers;
                 break;
@@ -262,10 +262,14 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
      */
     checkFrame(buffer: Uint8Array): FrameCheckResult {
         if (buffer.length < 5) {
+            // 这里我们至少需要读到功能码(index 1)和异常码(index 2)或者字节数(index 2)
+            // 所以长度限制至少要能判断出后续逻辑
+            // 不过标准的最小帧是异常帧 5 字节
+            // 如果还不到5字节，肯定是 INCOMPLETE (除非是特短的非标协议，但 Modbus RTU 最小就是5)
             return FrameCheckResult.INCOMPLETE;
         }
 
-        const functionCode = buffer[1];
+        const functionCode = buffer[1]!;
 
         // 异常响应固定 5 字节
         if (functionCode & 0x80) {
@@ -286,7 +290,7 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
             case ModbusFunctionCode.READ_HOLDING_REGISTERS:
             case ModbusFunctionCode.READ_INPUT_REGISTERS:
                 if (buffer.length < 3) return FrameCheckResult.INCOMPLETE;
-                expectedLength = 3 + buffer[2] + 2; // 地址+功能码+字节数 + 数据 + CRC
+                expectedLength = 3 + buffer[2]! + 2; // 地址+功能码+字节数 + 数据 + CRC
                 break;
 
             case ModbusFunctionCode.WRITE_SINGLE_COIL:

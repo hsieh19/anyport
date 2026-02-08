@@ -12,6 +12,50 @@ import {
 /**
  * Web Serial 传输层实现
  */
+
+// Augment the Navigator interface
+declare global {
+    interface Navigator {
+        serial: {
+            requestPort(options?: SerialPortRequestOptions): Promise<SerialPort>;
+            getPorts(): Promise<SerialPort[]>;
+            addEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): void;
+            removeEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions): void;
+        };
+    }
+
+    interface SerialPort {
+        readable: ReadableStream<Uint8Array>;
+        writable: WritableStream<Uint8Array>;
+        open(options: SerialOptions): Promise<void>;
+        close(): Promise<void>;
+        getInfo(): SerialPortInfo;
+    }
+
+    interface SerialOptions {
+        baudRate: number;
+        dataBits?: number;
+        stopBits?: number;
+        parity?: 'none' | 'even' | 'odd';
+        bufferSize?: number;
+        flowControl?: 'none' | 'hardware';
+    }
+
+    interface SerialPortInfo {
+        usbVendorId?: number;
+        usbProductId?: number;
+    }
+
+    interface SerialPortRequestOptions {
+        filters?: SerialPortFilter[];
+    }
+
+    interface SerialPortFilter {
+        usbVendorId?: number;
+        usbProductId?: number;
+    }
+}
+
 export class WebSerialTransport implements ITransportAdapter {
     readonly type = TransportType.WEB_SERIAL;
 

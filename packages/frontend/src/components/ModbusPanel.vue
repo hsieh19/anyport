@@ -80,8 +80,8 @@ function encodeValue(valStr: string, dataType: string, endian: string = 'ABCD'):
   else reordered = [bytes[0]!, bytes[1]!, bytes[2]!, bytes[3]!]; // ABCD
 
   return [
-    (reordered[0] << 8) | reordered[1],
-    (reordered[2] << 8) | reordered[3]
+    ((reordered[0] ?? 0) << 8) | (reordered[1] ?? 0),
+    ((reordered[2] ?? 0) << 8) | (reordered[3] ?? 0)
   ];
 }
 
@@ -495,9 +495,9 @@ function getWriteValues(): number[] | undefined {
 
   // 场景 1: 自动模式下的智能转换
   if (runMode.value === 'auto' && reg) {
-    const valStr = isSingleWrite.value ? String(writeValue.value) : writeValues.value.split(',')[0];
+    const valStr = (isSingleWrite.value ? String(writeValue.value) : writeValues.value.split(',')[0]) || '0';
     const defaultEndian = selectedProfile.value?.data.protocol_summary.default_endian || 'ABCD';
-    return encodeValue(valStr, reg.data_type || 'uint16', reg.endian || defaultEndian);
+    return encodeValue(valStr, (reg.data_type || 'uint16'), (reg.endian || defaultEndian));
   }
 
   // 场景 2: 手动模式
@@ -582,9 +582,9 @@ function updateAutoAddress() {
       functionCode.value = allowedCodes[0] as ModbusFunctionCode;
     }
     
-    const firstCode = allowedCodes.length > 0 ? allowedCodes[0] : functionCode.value;
+    const firstCode = allowedCodes[0] ?? functionCode.value;
     // 强制根据目前的 useBase1 状态重新计算
-    startAddress.value = getModbusOffset(reg.addr || 0, firstCode, useBase1.value);
+    startAddress.value = getModbusOffset((reg.addr !== undefined ? reg.addr : 0), firstCode, useBase1.value);
     quantity.value = reg.count || 1;
   }
 }

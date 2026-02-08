@@ -31,7 +31,7 @@ function selectTab(id: string) {
         <span class="logo-icon">🔌</span>
         <span class="logo-text">Anyport</span>
       </div>
-      <p class="version">v1.0.0</p>
+      <p class="version">v1.0.1</p>
     </div>
     
     <nav class="sidebar-nav">

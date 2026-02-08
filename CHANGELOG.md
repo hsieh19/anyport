@@ -1,9 +1,13 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## [1.0.1] - 2026-02-08
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+### Added
+- **Docker 支持**: 添加 Dockerfile，支持基于 Nginx 的容器化部署。
+- **CI/CD**: 添加 GitHub Actions 工作流，实现 Tag 推送时自动构建并发布镜像到 GHCR。
+
+### Fixed
+- **类型定义**: 修复 `WebSerialTransport.ts` 和 `device.types.ts` 中的 TypeScript 错误，确保项目顺利构建。
 
 ## [1.0.0] - 2026-02-05
 

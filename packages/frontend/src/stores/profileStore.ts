@@ -4,7 +4,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { ProfileService } from '@/services/profileService';
-import type { SavedProfile, DeviceProfile } from '@/types/profile';
+import type { SavedProfile } from '@/types/profile';
 
 export const useProfileStore = defineStore('profile', () => {
     const profiles = ref<SavedProfile[]>([]);
