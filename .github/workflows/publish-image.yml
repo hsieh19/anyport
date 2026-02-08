@@ -13,12 +13,14 @@ jobs:
   build-and-push-image:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -44,3 +46,34 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Extract Changelog segment
+        id: extract_changelog
+        run: |
+          # 提取当前 tag 对应的 CHANGELOG.md 段落
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          # 去掉 'v' 前缀以匹配 CHANGELOG.md 中的格式 [1.0.1]
+          VERSION_NUM="${VERSION#v}"
+          
+          # 简单的 sed 脚本：匹配最近的一个版本段落
+          # 这里假设 CHANGELOG.md 格式为 ## [x.x.x]
+          sed -n "/## \[$VERSION_NUM\]/,/## \[/p" CHANGELOG.md | sed '$d' > release_notes.txt
+          echo "notes_file=release_notes.txt" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ## 🐳 Docker Image
+            `docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.VERSION }}`
+            
+            ---
+            $(cat release_notes.txt)
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
