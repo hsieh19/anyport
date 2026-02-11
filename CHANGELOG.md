@@ -1,5 +1,19 @@
 # Changelog
- 
+
+## [1.0.3] - 2026-02-11
+
+### Added
+- 完整实现 Modbus 调试主流程，包括 Modbus RTU、本地串口和调试面板。
+- 新增 Modbus TCP 适配器与 WebSocket 网关传输层，支持通过网关远程调试。
+- 新增 ESP32-C3 网关固件工程（`esp32/AnyPortGateway`），用于现场部署 AnyPort Gateway。
+
+### Changed
+- 更新 README 文档，完善 Modbus 调试功能说明与架构描述。
+- 在桌面端侧边栏中显示当前版本号，便于快速确认部署版本。
+
+### Fixed
+- 优化 Modbus 调试数据解析逻辑，确保结果视图与通信日志显示一致。
+
 ## [1.0.2] - 2026-02-08
 
 ### Added
