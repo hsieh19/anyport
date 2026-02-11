@@ -51,8 +51,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
-      // 指向 shared 包编译后的输出目录
-      '@shared': resolve(__dirname, '../shared/dist')
+      '@shared': resolve(__dirname, '../shared/src')
     }
   },
   server: {

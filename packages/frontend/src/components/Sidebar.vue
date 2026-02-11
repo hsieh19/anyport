@@ -8,7 +8,7 @@ const emits = defineEmits<{
 const activeTab = ref('modbus');
 
 const menuItems = [
-  { id: 'modbus', label: 'Modbus RTU', icon: '📡' },
+  { id: 'modbus', label: 'Modbus 调试', icon: '📡' },
   { id: 'profiles', label: '点表库', icon: '📚' },
   { id: 'dlt645', label: 'DL/T 645', icon: '⚡', disabled: true },
   { id: 'mqtt', label: 'MQTT Client', icon: '☁️', disabled: true },

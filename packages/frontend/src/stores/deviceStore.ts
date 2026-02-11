@@ -5,10 +5,47 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { WebSerialTransport } from '@/transports/WebSerialTransport';
-import { ModbusRtuAdapter } from '@/protocols/modbus';
+import { WebSocketGatewayTransport } from '@/transports/WebSocketGatewayTransport';
+import { ModbusRtuAdapter, ModbusTcpAdapter } from '@/protocols/modbus';
 import type { ConnectionConfig } from '@shared/types/transport.types';
-import { FrameCheckResult } from '@shared/types/protocol.types';
+import { FrameCheckResult, type IProtocolAdapter } from '@shared/types/protocol.types';
 import type { ModbusRtuCommand, ModbusRtuResponse } from '@/protocols/modbus';
+
+// 物理连接通道
+export type ConnectionType = 'serial' | 'gateway';
+
+// 网关转发目标协议
+export type GatewayProtocol = 'tcp' | 'rtu';
+
+// 网关配置结构
+export interface GatewayConfig {
+    address: string;
+    wsPort?: number;
+    protocol: GatewayProtocol;
+    tcpTarget: {
+        ip: string;
+        port: number;
+        unitId: number;
+    };
+    rtuTarget: {
+        slaveId: number;
+        baudRate: number;
+        dataBits: 8;
+        stopBits: 1 | 2;
+        parity: 'none' | 'even' | 'odd';
+    };
+}
+
+export type GatewayStatus = 'online' | 'offline';
+
+export interface Gateway {
+    id: string;
+    name: string;
+    host: string;
+    port: number;
+    status: GatewayStatus;
+    latency: number | null;
+}
 
 /**
  * 通信日志条目
@@ -22,15 +59,116 @@ export interface LogEntry {
     parsed?: ModbusRtuResponse;
 }
 
+type ModbusMode = 'rtu' | 'tcp';
+
+interface ModbusTcpOptions {
+    ip: string;
+    port: number;
+    unitId: number;
+}
+
+const GATEWAYS_STORAGE_KEY = 'anyport_gateways';
+
+function loadGatewaysFromStorage(): Gateway[] {
+    if (typeof window === 'undefined') {
+        return [];
+    }
+    const raw = window.localStorage.getItem(GATEWAYS_STORAGE_KEY);
+    if (!raw) {
+        return [];
+    }
+    try {
+        const parsed = JSON.parse(raw) as Gateway[];
+        if (!Array.isArray(parsed)) {
+            return [];
+        }
+        return parsed
+            .map(item => ({
+                id: item.id,
+                name: item.name,
+                host: item.host,
+                port: item.port,
+                status: (item.status === 'online' ? 'online' : 'offline') as GatewayStatus,
+                latency: typeof item.latency === 'number' ? item.latency : null
+            }))
+            .filter(g => !!g.id && !!g.host);
+    } catch {
+        return [];
+    }
+}
+
+function saveGatewaysToStorage(list: Gateway[]): void {
+    if (typeof window === 'undefined') {
+        return;
+    }
+    try {
+        window.localStorage.setItem(GATEWAYS_STORAGE_KEY, JSON.stringify(list));
+    } catch {
+    }
+}
+
 export const useDeviceStore = defineStore('device', () => {
     // 状态
     const transport = ref<WebSerialTransport | null>(null);
-    const adapter = ref<ModbusRtuAdapter>(new ModbusRtuAdapter());
+    const gatewayTransport = ref<WebSocketGatewayTransport | null>(null);
+    const rtuAdapter = new ModbusRtuAdapter();
+    const tcpAdapter = new ModbusTcpAdapter();
+    const adapter = ref<IProtocolAdapter<ModbusRtuCommand, ModbusRtuResponse>>(rtuAdapter);
     const isConnected = ref(false);
     const isConnecting = ref(false);
     const lastError = ref<string | null>(null);
     const logs = ref<LogEntry[]>([]);
     const receiveBuffer = ref<Uint8Array>(new Uint8Array(0));
+    const modbusMode = ref<ModbusMode>('rtu');
+    const tcpOptions = ref<ModbusTcpOptions>({
+        ip: '127.0.0.1',
+        port: 502,
+        unitId: 1
+    });
+    const connectionType = ref<ConnectionType>('serial');
+    const gatewayOptions = ref<GatewayConfig>({
+        address: 'anyport.local',
+        wsPort: 81,
+        protocol: 'tcp',
+        tcpTarget: {
+            ip: '192.168.1.5',
+            port: 502,
+            unitId: 1
+        },
+        rtuTarget: {
+            slaveId: 1,
+            baudRate: 9600,
+            dataBits: 8,
+            stopBits: 1,
+            parity: 'none'
+        }
+    });
+    const gateways = ref<Gateway[]>(loadGatewaysFromStorage());
+
+    function addGateway(input: { id?: string; name: string; host: string; port: number }): Gateway {
+        const id = input.id || (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+        const gateway: Gateway = {
+            id,
+            name: input.name,
+            host: input.host,
+            port: input.port,
+            status: 'offline',
+            latency: null
+        };
+        gateways.value = [...gateways.value, gateway];
+        saveGatewaysToStorage(gateways.value);
+        return gateway;
+    }
+
+    function updateGateway(id: string, updates: Partial<Omit<Gateway, 'id'>>): void {
+        gateways.value = gateways.value.map(g => (g.id === id ? { ...g, ...updates } : g));
+        saveGatewaysToStorage(gateways.value);
+    }
+
+    function deleteGateway(id: string): void {
+        gateways.value = gateways.value.filter(g => g.id !== id);
+        saveGatewaysToStorage(gateways.value);
+    }
 
     // 连接配置
     const connectionConfig = ref<ConnectionConfig>({
@@ -53,50 +191,88 @@ export const useDeviceStore = defineStore('device', () => {
         lastError.value = null;
 
         try {
-            transport.value = new WebSerialTransport();
+            if (connectionType.value === 'serial') {
+                if (gatewayTransport.value && gatewayTransport.value.isConnected) {
+                    await gatewayTransport.value.disconnect();
+                }
+                gatewayTransport.value = null;
 
-            // 注册回调
-            transport.value.onData(handleData);
-            transport.value.onError(handleError);
-            transport.value.onStateChange(handleStateChange);
+                const instance = new WebSerialTransport();
+                transport.value = instance;
 
-            await transport.value.connect(connectionConfig.value);
-            isConnected.value = true;
+                instance.onData(handleData);
+                instance.onError(handleError);
+                instance.onStateChange(handleSerialStateChange);
+
+                await instance.connect(connectionConfig.value);
+                isConnected.value = true;
+            } else {
+                if (transport.value && transport.value.isConnected) {
+                    await transport.value.disconnect();
+                }
+                transport.value = null;
+
+                const instance = new WebSocketGatewayTransport();
+                gatewayTransport.value = instance;
+
+                instance.onData(handleData);
+                instance.onError(handleError);
+                instance.onStateChange(handleGatewayStateChange);
+
+                await instance.connect(gatewayOptions.value);
+                isConnected.value = true;
+            }
         } catch (error) {
             lastError.value = error instanceof Error ? error.message : String(error);
             transport.value = null;
+            gatewayTransport.value = null;
+            isConnected.value = false;
         } finally {
             isConnecting.value = false;
         }
     }
 
     async function disconnect(): Promise<void> {
-        if (!transport.value) return;
+        if (!transport.value && !gatewayTransport.value) return;
 
         try {
-            await transport.value.disconnect();
+            if (transport.value) {
+                await transport.value.disconnect();
+            }
+            if (gatewayTransport.value) {
+                await gatewayTransport.value.disconnect();
+            }
         } catch (error) {
             console.error('断开连接失败:', error);
         } finally {
             transport.value = null;
+            gatewayTransport.value = null;
             isConnected.value = false;
             receiveBuffer.value = new Uint8Array(0);
         }
     }
 
     async function sendCommand(command: ModbusRtuCommand): Promise<ModbusRtuResponse | null> {
-        if (!transport.value || !isConnected.value) {
+        const serialInstance = transport.value;
+        const gatewayInstance = gatewayTransport.value;
+
+        const activeTransport =
+            serialInstance && serialInstance.isConnected
+                ? serialInstance
+                : gatewayInstance && gatewayInstance.isConnected
+                    ? gatewayInstance
+                    : null;
+
+        if (!activeTransport || !isConnected.value) {
             throw new Error('未连接设备');
         }
 
-        // 编码并发送
         const frame = adapter.value.encode(command);
-        await transport.value.send(frame);
+        await activeTransport.send(frame);
 
-        // 记录发送日志
         addLog('tx', frame);
 
-        return null; // 响应通过 onData 回调处理
+        return null;
     }
 
     function handleData(data: Uint8Array): void {
@@ -127,10 +303,19 @@ export const useDeviceStore = defineStore('device', () => {
         console.error('通信错误:', error);
     }
 
-    function handleStateChange(connected: boolean): void {
+    function handleSerialStateChange(connected: boolean): void {
         isConnected.value = connected;
         if (!connected) {
             transport.value = null;
+            receiveBuffer.value = new Uint8Array(0);
+        }
+    }
+
+    function handleGatewayStateChange(connected: boolean): void {
+        isConnected.value = connected;
+        if (!connected) {
+            gatewayTransport.value = null;
+            receiveBuffer.value = new Uint8Array(0);
         }
     }
 
@@ -169,6 +354,90 @@ export const useDeviceStore = defineStore('device', () => {
         };
     }
 
+    function setModbusMode(mode: ModbusMode): void {
+        modbusMode.value = mode;
+        adapter.value = mode === 'rtu' ? rtuAdapter : tcpAdapter;
+    }
+
+    function updateTcpOptions(options: Partial<ModbusTcpOptions>): void {
+        tcpOptions.value = {
+            ...tcpOptions.value,
+            ...options
+        };
+    }
+
+    function setConnectionType(type: ConnectionType): void {
+        connectionType.value = type;
+    }
+
+    function updateGatewayOptions(options: Partial<GatewayConfig>): void {
+        gatewayOptions.value = {
+            ...gatewayOptions.value,
+            ...options
+        };
+    }
+
+    async function checkGatewayStatus(id: string): Promise<void> {
+        const target = gateways.value.find(g => g.id === id);
+        if (!target) {
+            return;
+        }
+        const start = performance.now();
+        let url = target.host;
+        if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
+            url = `ws://${target.host}:${target.port}`;
+        }
+        await new Promise<void>(resolve => {
+            let settled = false;
+            try {
+                const ws = new WebSocket(url);
+                const timeoutId = window.setTimeout(() => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    ws.close();
+                    updateGateway(id, { status: 'offline', latency: null });
+                    resolve();
+                }, 5000);
+                ws.onopen = () => {
+                    if (settled) {
+                        return;
+                    }
+                    const latency = Math.round(performance.now() - start);
+                    settled = true;
+                    window.clearTimeout(timeoutId);
+                    updateGateway(id, { status: 'online', latency });
+                    ws.close();
+                    resolve();
+                };
+                ws.onerror = () => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    window.clearTimeout(timeoutId);
+                    updateGateway(id, { status: 'offline', latency: null });
+                    resolve();
+                };
+                ws.onclose = () => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    window.clearTimeout(timeoutId);
+                    updateGateway(id, { status: 'offline', latency: null });
+                    resolve();
+                };
+            } catch {
+                if (!settled) {
+                    updateGateway(id, { status: 'offline', latency: null });
+                    resolve();
+                }
+            }
+        });
+    }
+
     return {
         // 状态
         isConnected,
@@ -178,11 +447,24 @@ export const useDeviceStore = defineStore('device', () => {
         logs,
         connectionConfig,
         adapter,
+        modbusMode,
+        tcpOptions,
+        connectionType,
+        gatewayOptions,
+        gateways,
         // 方法
         connect,
         disconnect,
         sendCommand,
         clearLogs,
-        updateConfig
+        updateConfig,
+        setModbusMode,
+        updateTcpOptions,
+        setConnectionType,
+        updateGatewayOptions,
+        addGateway,
+        updateGateway,
+        deleteGateway,
+        checkGatewayStatus
     };
 });

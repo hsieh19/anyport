@@ -12,7 +12,7 @@ function handleTabChange(id: string) {
 
 const pageTitle = computed(() => {
   switch (currentView.value) {
-    case 'modbus': return 'Modbus RTU 调试';
+    case 'modbus': return 'Modbus 调试';
     case 'profiles': return '点表库管理';
     default: return '控制台';
   }

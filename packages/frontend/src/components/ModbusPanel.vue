@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
-import { useDeviceStore } from '@/stores/deviceStore';
+import { useDeviceStore, type ConnectionType, type Gateway } from '@/stores/deviceStore';
 import { useProfileStore } from '@/stores/profileStore'; 
 import { ModbusFunctionCode } from '@/protocols/modbus';
 import type { ModbusRtuCommand } from '@/protocols/modbus';
@@ -246,6 +246,163 @@ const dataBits = ref(8);
 const stopBits = ref(1);
 const parity = ref<'none' | 'even' | 'odd'>('none');
 
+const connectionType = computed<ConnectionType>({
+  get: () => deviceStore.connectionType,
+  set: (value: ConnectionType) => {
+    deviceStore.setConnectionType(value);
+    if (value === 'serial') {
+      deviceStore.setModbusMode('rtu');
+    } else {
+      deviceStore.setModbusMode(deviceStore.gatewayOptions.protocol);
+    }
+  }
+});
+
+const modbusCommandTitle = computed(() =>
+  deviceStore.modbusMode === 'rtu' ? 'Modbus RTU 命令' : 'Modbus TCP 命令'
+);
+
+const selectedGatewayId = ref<string>('');
+const isGatewayManagerOpen = ref(false);
+const editingGatewayId = ref<string | null>(null);
+const gatewayFormName = ref('');
+const gatewayFormHost = ref('');
+const gatewayFormPort = ref<number | null>(null);
+const gatewayFormError = ref('');
+
+const selectedGateway = computed<Gateway | null>(() => {
+  if (!selectedGatewayId.value) {
+    return null;
+  }
+  const found = deviceStore.gateways.find(g => g.id === selectedGatewayId.value);
+  return found || null;
+});
+
+const gatewayLatencyText = computed(() => {
+  if (!selectedGateway.value || typeof selectedGateway.value.latency !== 'number') {
+    return '--';
+  }
+  return `${selectedGateway.value.latency}ms`;
+});
+
+const gatewayTargetText = computed(() => {
+  const opts = deviceStore.gatewayOptions;
+  if (opts.protocol === 'tcp') {
+    const { ip, port, unitId } = opts.tcpTarget;
+    return `TCP ${ip}:${port} (Unit ID ${unitId})`;
+  }
+  const { slaveId, baudRate, dataBits, stopBits, parity } = opts.rtuTarget;
+  return `RTU Slave ${slaveId}, ${baudRate}bps, ${dataBits}N${parity === 'none' ? '' : parity === 'even' ? 'E' : 'O'}${stopBits}`;
+});
+
+function syncGatewayToOptions(gateway: Gateway): void {
+  deviceStore.updateGatewayOptions({
+    address: gateway.host,
+    wsPort: gateway.port,
+    tcpTarget: {
+      ...deviceStore.gatewayOptions.tcpTarget,
+      ip: gateway.host,
+      port: gateway.port
+    }
+  });
+}
+
+watch(
+  () => deviceStore.gateways.length,
+  length => {
+    if (length > 0 && !selectedGatewayId.value) {
+      const first = deviceStore.gateways[0];
+      if (first) {
+        selectedGatewayId.value = first.id;
+        syncGatewayToOptions(first);
+      }
+    }
+  },
+  { immediate: true }
+);
+
+watch(selectedGatewayId, id => {
+  const target = deviceStore.gateways.find(g => g.id === id);
+  if (target) {
+    syncGatewayToOptions(target);
+  }
+});
+
+function resetGatewayForm(target?: Gateway): void {
+  if (target) {
+    editingGatewayId.value = target.id;
+    gatewayFormName.value = target.name;
+    gatewayFormHost.value = target.host;
+    gatewayFormPort.value = target.port;
+  } else {
+    editingGatewayId.value = null;
+    gatewayFormName.value = '';
+    gatewayFormHost.value = '';
+    gatewayFormPort.value = null;
+  }
+  gatewayFormError.value = '';
+}
+
+function openGatewayManager(): void {
+  isGatewayManagerOpen.value = true;
+  if (selectedGateway.value) {
+    resetGatewayForm(selectedGateway.value);
+  } else {
+    resetGatewayForm();
+  }
+}
+
+function closeGatewayManager(): void {
+  isGatewayManagerOpen.value = false;
+}
+
+function handleSelectGatewayInList(gateway: Gateway): void {
+  selectedGatewayId.value = gateway.id;
+  resetGatewayForm(gateway);
+}
+
+function handleDeleteGateway(id: string): void {
+  deviceStore.deleteGateway(id);
+  if (selectedGatewayId.value === id) {
+    const first = deviceStore.gateways[0];
+    selectedGatewayId.value = first ? first.id : '';
+    if (first) {
+      syncGatewayToOptions(first);
+    }
+  }
+}
+
+function submitGatewayForm(): void {
+  const name = gatewayFormName.value.trim();
+  const host = gatewayFormHost.value.trim();
+  const port = gatewayFormPort.value ?? 0;
+  if (!name || !host || !port) {
+    gatewayFormError.value = '请填写完整的名称、地址和端口。';
+    return;
+  }
+  if (editingGatewayId.value) {
+    deviceStore.updateGateway(editingGatewayId.value, {
+      name,
+      host,
+      port
+    });
+    const updated = deviceStore.gateways.find(g => g.id === editingGatewayId.value);
+    if (updated) {
+      selectedGatewayId.value = updated.id;
+      syncGatewayToOptions(updated);
+    }
+  } else {
+    const created = deviceStore.addGateway({
+      name,
+      host,
+      port
+    });
+    selectedGatewayId.value = created.id;
+    syncGatewayToOptions(created);
+  }
+  gatewayFormError.value = '';
+}
+
 // 原始功能码选项定义
 const ALL_FUNCTION_CODES = [
   { value: ModbusFunctionCode.READ_COILS, label: '01 - 读线圈' },
@@ -294,19 +451,31 @@ const isSingleWrite = computed(() => {
   ].includes(functionCode.value);
 });
 
-// 连接/断开
 async function toggleConnection() {
   if (deviceStore.isConnected) {
     await deviceStore.disconnect();
-  } else {
-    deviceStore.updateConfig({
-      baudRate: baudRate.value,
-      dataBits: dataBits.value as 5 | 6 | 7 | 8,
-      stopBits: stopBits.value as 1 | 2,
-      parity: parity.value
-    });
-    await deviceStore.connect();
+    return;
   }
+
+  if (connectionType.value === 'gateway') {
+    if (!selectedGatewayId.value) {
+      triggerAlert('请先选择一个网关或在“WiFi 网关”右侧添加网关。');
+      return;
+    }
+    await deviceStore.connect();
+    if (selectedGatewayId.value) {
+      await deviceStore.checkGatewayStatus(selectedGatewayId.value);
+    }
+    return;
+  }
+
+  deviceStore.updateConfig({
+    baudRate: baudRate.value,
+    dataBits: dataBits.value as 5 | 6 | 7 | 8,
+    stopBits: stopBits.value as 1 | 2,
+    parity: parity.value
+  });
+  await deviceStore.connect();
 }
 
 // --- 写入确认逻辑 ---
@@ -896,48 +1065,189 @@ const latestReadResults = computed(() => {
           <span class="icon">🔌</span>
           连接配置
         </h2>
-        
-        <div class="config-bar">
-          <div class="config-group">
-            <select v-model="baudRate" :disabled="deviceStore.isConnected">
-              <option v-for="rate in baudRateOptions" :key="rate" :value="rate">
-                {{ rate }} bps
-              </option>
-            </select>
-            
-            <select v-model="dataBits" :disabled="deviceStore.isConnected">
-              <option :value="7">7 数据位</option>
-              <option :value="8">8 数据位</option>
-            </select>
-            
-            <select v-model="stopBits" :disabled="deviceStore.isConnected">
-              <option :value="1">1 停止位</option>
-              <option :value="2">2 停止位</option>
-            </select>
-            
-            <select v-model="parity" :disabled="deviceStore.isConnected">
-              <option value="none">无校验</option>
-              <option value="even">偶校验</option>
-              <option value="odd">奇校验</option>
-            </select>
+
+        <div class="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
+          <div class="inline-flex rounded-full bg-slate-100 p-1 shadow-inner items-center gap-1">
+            <button
+              class="mode-tab"
+              :class="{ active: connectionType === 'serial' }"
+              @click="connectionType = 'serial'"
+            >
+              USB 直连
+            </button>
+            <button
+              class="mode-tab mode-tab-gateway"
+              :class="{ active: connectionType === 'gateway' }"
+              @click="connectionType = 'gateway'"
+            >
+              WiFi 网关
+              <span
+                class="gateway-settings-icon"
+                @click.stop="openGatewayManager"
+                title="管理网关"
+              >
+                ⚙
+              </span>
+            </button>
           </div>
 
-          <button 
-            class="btn-connect"
-            :class="{ connected: deviceStore.isConnected, connecting: deviceStore.isConnecting }"
-            :disabled="deviceStore.isConnecting || !deviceStore.isSupported"
-            @click="toggleConnection"
-          >
-            <span v-if="deviceStore.isConnecting" class="spinner"></span>
-            {{ deviceStore.isConnected ? '断开' : '连接' }}
-          </button>
+          <div class="config-bar">
+            <div
+              class="config-group flex flex-nowrap items-center gap-2"
+              v-if="connectionType === 'gateway'"
+            >
+              <select
+                v-model="selectedGatewayId"
+                :disabled="deviceStore.isConnected || !deviceStore.gateways.length"
+                class="gateway-select flex-1 min-w-0"
+              >
+                <option value="" disabled>
+                  {{ deviceStore.gateways.length ? '请选择网关' : '暂无网关，点击右侧设置添加' }}
+                </option>
+                <option
+                  v-for="g in deviceStore.gateways"
+                  :key="g.id"
+                  :value="g.id"
+                  :style="{ color: g.status === 'online' ? '#16a34a' : '#9ca3af' }"
+                >
+                  ● {{ g.name }} ({{ g.host }}:{{ g.port }}){{ typeof g.latency === 'number' ? ` ${g.latency}ms` : '' }}
+                </option>
+              </select>
+
+              <div class="base-switch">
+                <button
+                  :class="{ active: deviceStore.gatewayOptions.protocol === 'tcp' }"
+                  :disabled="deviceStore.isConnected"
+                  @click="deviceStore.updateGatewayOptions({ protocol: 'tcp' }); deviceStore.setModbusMode('tcp')"
+                >
+                  TCP
+                </button>
+                <button
+                  :class="{ active: deviceStore.gatewayOptions.protocol === 'rtu' }"
+                  :disabled="deviceStore.isConnected"
+                  @click="deviceStore.updateGatewayOptions({ protocol: 'rtu' }); deviceStore.setModbusMode('rtu')"
+                >
+                  RTU
+                </button>
+              </div>
+
+              <template v-if="deviceStore.gatewayOptions.protocol === 'tcp'">
+                <input
+                  type="text"
+                  v-model="deviceStore.gatewayOptions.tcpTarget.ip"
+                  :disabled="deviceStore.isConnected"
+                  placeholder="设备 IP"
+                  class="w-32"
+                />
+                <input
+                  type="number"
+                  v-model.number="deviceStore.gatewayOptions.tcpTarget.port"
+                  :disabled="deviceStore.isConnected"
+                  placeholder="端口"
+                  class="w-20"
+                />
+                <input
+                  type="number"
+                  v-model.number="deviceStore.gatewayOptions.tcpTarget.unitId"
+                  :disabled="deviceStore.isConnected"
+                  placeholder="Slave ID"
+                  class="w-20"
+                />
+              </template>
+
+              <template v-else>
+                <div class="flex items-center gap-2">
+                  <select
+                    v-model.number="deviceStore.gatewayOptions.rtuTarget.baudRate"
+                    :disabled="deviceStore.isConnected"
+                    class="w-28"
+                  >
+                    <option v-for="rate in baudRateOptions" :key="rate" :value="rate">
+                      {{ rate }} bps
+                    </option>
+                  </select>
+
+                  <select
+                    v-model="deviceStore.gatewayOptions.rtuTarget.dataBits"
+                    :disabled="deviceStore.isConnected"
+                    class="w-24"
+                  >
+                    <option :value="7">7 数据位</option>
+                    <option :value="8">8 数据位</option>
+                  </select>
+
+                  <select
+                    v-model="deviceStore.gatewayOptions.rtuTarget.stopBits"
+                    :disabled="deviceStore.isConnected"
+                    class="w-24"
+                  >
+                    <option :value="1">1 停止位</option>
+                    <option :value="2">2 停止位</option>
+                  </select>
+
+                  <select
+                    v-model="deviceStore.gatewayOptions.rtuTarget.parity"
+                    :disabled="deviceStore.isConnected"
+                    class="w-28"
+                  >
+                    <option value="none">无校验</option>
+                    <option value="even">偶校验</option>
+                    <option value="odd">奇校验</option>
+                  </select>
+                </div>
+              </template>
+            </div>
+
+            <div class="config-group" v-else>
+              <select v-model="baudRate" :disabled="deviceStore.isConnected">
+                <option v-for="rate in baudRateOptions" :key="rate" :value="rate">
+                  {{ rate }} bps
+                </option>
+              </select>
+
+              <select v-model="dataBits" :disabled="deviceStore.isConnected">
+                <option :value="7">7 数据位</option>
+                <option :value="8">8 数据位</option>
+              </select>
+
+              <select v-model="stopBits" :disabled="deviceStore.isConnected">
+                <option :value="1">1 停止位</option>
+                <option :value="2">2 停止位</option>
+              </select>
+
+              <select v-model="parity" :disabled="deviceStore.isConnected">
+                <option value="none">无校验</option>
+                <option value="even">偶校验</option>
+                <option value="odd">奇校验</option>
+              </select>
+            </div>
+
+            <button 
+              class="btn-connect"
+              :class="{ connected: deviceStore.isConnected, connecting: deviceStore.isConnecting }"
+              :disabled="deviceStore.isConnecting || (!deviceStore.isSupported && connectionType === 'serial')"
+              @click="toggleConnection"
+            >
+              <span v-if="deviceStore.isConnecting" class="spinner"></span>
+              {{ deviceStore.isConnected ? '断开' : '连接' }}
+            </button>
+          </div>
         </div>
       </div>
       
-      <div v-if="!isSecure" class="error-banner">
+      <div
+        v-if="connectionType === 'gateway' && deviceStore.isConnected && selectedGateway"
+        class="info-banner"
+      >
+        ✅ 已连接网关：
+        {{ selectedGateway.name }} ({{ selectedGateway.host }}:{{ selectedGateway.port }})
+        ｜ 延迟 {{ gatewayLatencyText }}
+        ｜ 目标 {{ gatewayTargetText }}
+      </div>
+      <div v-if="connectionType === 'serial' && !isSecure" class="error-banner">
         ❌ 检测到非安全上下文。Web Serial API 需要 <strong>HTTPS</strong> 或 <strong>localhost</strong>。不允许使用 IP 地址访问。
       </div>
-      <div v-else-if="!deviceStore.isSupported" class="warning-banner">
+      <div v-else-if="connectionType === 'serial' && !deviceStore.isSupported" class="warning-banner">
         ⚠️ 当前浏览器不支持 Web Serial API，请使用 Chrome 89+ 或 Edge 89+
       </div>
       <div v-if="deviceStore.lastError" class="error-banner">
@@ -952,7 +1262,7 @@ const latestReadResults = computed(() => {
         <div class="section-header-row">
           <h2 class="section-title">
             <span class="icon">📡</span>
-            Modbus RTU 命令
+            {{ modbusCommandTitle }}
             
             <div class="mode-switch-simple">
               <!-- 新增：选择点表按钮 -->
@@ -1276,6 +1586,96 @@ const latestReadResults = computed(() => {
       </div> <!-- closes monitor-grid -->
     </div> <!-- closes panel-body -->
 
+    <div v-if="isGatewayManagerOpen" class="modal-overlay" @click.self="closeGatewayManager">
+      <div class="modal-content gateway-manager">
+        <div class="modal-header">
+          <h3>WiFi 网关管理</h3>
+          <button class="btn-close" @click="closeGatewayManager">×</button>
+        </div>
+        <div class="modal-body gateway-manager-body">
+          <div class="gateway-list">
+            <div v-if="deviceStore.gateways.length === 0" class="empty-state">
+              暂无网关，请在右侧表单中新建。
+            </div>
+            <div
+              v-for="g in deviceStore.gateways"
+              :key="g.id"
+              class="gateway-item"
+              :class="{ active: selectedGatewayId === g.id }"
+              @click="handleSelectGatewayInList(g)"
+            >
+              <span
+                class="status-dot"
+                :class="g.status === 'online' ? 'online' : 'offline'"
+              ></span>
+              <div class="g-main">
+                <div class="g-name">{{ g.name }}</div>
+                <div class="g-sub">
+                  {{ g.host }}:{{ g.port }}
+                  <span v-if="typeof g.latency === 'number'" class="g-latency">
+                    {{ g.latency }}ms
+                  </span>
+                  <span v-else class="g-latency g-latency-na">--</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="btn-ghost"
+                @click.stop="deviceStore.checkGatewayStatus(g.id)"
+              >
+                检测
+              </button>
+              <button
+                type="button"
+                class="btn-ghost danger"
+                @click.stop="handleDeleteGateway(g.id)"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+          <div class="gateway-form">
+            <div class="form-row">
+              <label>名称</label>
+              <input
+                v-model="gatewayFormName"
+                type="text"
+                placeholder="例如：车间网关"
+              />
+            </div>
+            <div class="form-row">
+              <label>地址(IP 或域名)</label>
+              <input
+                v-model="gatewayFormHost"
+                type="text"
+                placeholder="anyport.local 或 192.168.1.10"
+              />
+            </div>
+            <div class="form-row">
+              <label>端口</label>
+              <input
+                v-model.number="gatewayFormPort"
+                type="number"
+                min="1"
+                max="65535"
+              />
+            </div>
+            <div v-if="gatewayFormError" class="gateway-form-error">
+              {{ gatewayFormError }}
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn-secondary" @click="resetGatewayForm()">
+                新建
+              </button>
+              <button type="button" class="btn-primary" @click="submitGatewayForm">
+                {{ editingGatewayId ? '保存修改' : '添加网关' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 点表选择弹窗 (简易版) -->
     <div v-if="isProfilePickerShow" class="modal-overlay" @click.self="isProfilePickerShow = false">
       <div class="modal-content profile-picker">
@@ -1403,6 +1803,32 @@ const latestReadResults = computed(() => {
   flex-wrap: wrap;
 }
 
+.mode-tabs {
+  display: inline-flex;
+  background: var(--color-bg);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  gap: 4px;
+}
+
+.mode-tab {
+  border: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-tab.active {
+  background: var(--color-surface-hover);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
 .config-bar {
   display: flex;
   align-items: center;
@@ -1416,10 +1842,93 @@ const latestReadResults = computed(() => {
   flex-wrap: wrap;
 }
 
-.config-group select {
+.config-group select,
+.config-group input {
   padding: 0.4rem 0.6rem;
   font-size: 0.9rem;
   min-width: 100px;
+  height: 2.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.gateway-config-box {
+  background: rgba(0, 0, 0, 0.02);
+  padding: 0.8rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.gateway-input {
+  min-width: 180px;
+}
+
+.gateway-select {
+  min-width: 220px;
+}
+
+.mode-tab-gateway {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gateway-settings-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 1rem;
+  color: var(--color-text-secondary);
+}
+
+.mode-tab-gateway.active .gateway-settings-icon {
+  color: var(--color-primary);
+}
+
+.gateway-settings-icon:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-row {
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.gateway-config-box .form-group:first-child {
+  flex: 1;
+}
+
+.dynamic-params .form-group.small {
+  width: 120px;
+}
+
+.gateway-config-box input,
+.gateway-config-box select {
+  height: 32px;
+  padding: 0.25rem 0.5rem;
+}
+
+.gateway-config-box .base-switch {
+  height: 32px;
+  align-items: center;
+}
+
+.gateway-config-box .base-switch button {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.gateway-config-box .label-with-switch label {
+  width: auto;
 }
 
 .btn-connect {
@@ -1435,6 +1944,16 @@ const latestReadResults = computed(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.info-banner {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(22, 163, 74, 0.1);
+  border: 1px solid rgba(22, 163, 74, 0.4);
+  font-size: 0.85rem;
+  color: var(--color-text);
 }
 
 .btn-connect.connected {
@@ -2212,6 +2731,162 @@ const latestReadResults = computed(() => {
   text-align: center;
   padding: 3rem;
   color: var(--color-text-secondary);
+}
+
+.gateway-manager {
+  background: var(--color-surface);
+  width: 720px;
+  max-height: 80vh;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+}
+
+.gateway-manager-body {
+  display: grid;
+  grid-template-columns: 1.4fr 1.2fr;
+  gap: 1rem;
+}
+
+.gateway-list {
+  padding-right: 0.5rem;
+  border-right: 1px solid var(--color-border);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.gateway-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.4rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.gateway-item:hover {
+  background: var(--color-surface-hover);
+}
+
+.gateway-item.active {
+  background: rgba(102, 126, 234, 0.08);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.status-dot.online {
+  background: #22c55e;
+}
+
+.status-dot.offline {
+  background: #9ca3af;
+}
+
+.g-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.g-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.g-sub {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+.g-latency {
+  margin-left: 6px;
+}
+
+.g-latency-na {
+  opacity: 0.6;
+}
+
+.btn-ghost {
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.btn-ghost:hover {
+  background: var(--color-surface-hover);
+}
+
+.btn-ghost.danger {
+  color: var(--color-error);
+}
+
+.gateway-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.gateway-form .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.gateway-form label {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.gateway-form input {
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  font-size: 0.9rem;
+}
+
+.gateway-form-error {
+  font-size: 0.8rem;
+  color: var(--color-error);
+}
+
+.gateway-form .form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  border: none;
+  color: white;
+  padding: 0.5rem 1.2rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
 }
 .auto-parsed-info {
   margin-top: 4px;
