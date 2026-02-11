@@ -52,10 +52,10 @@ export interface ModbusRtuCommand extends ProtocolCommand {
 }
 
 /**
- * Modbus RTU 响应
+ * Modbus 响应（用于 RTU/TCP 共用解析结果）
  */
 export interface ModbusRtuResponse extends ProtocolResponse {
-    protocol: ProtocolType.MODBUS_RTU;
+    protocol: ProtocolType.MODBUS_RTU | ProtocolType.MODBUS_TCP;
     /** 从站地址 */
     slaveAddress?: number;
     /** 功能码 */

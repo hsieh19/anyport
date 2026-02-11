@@ -15,7 +15,7 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
     private transactionId = 0;
 
     encode(command: ModbusRtuCommand): Uint8Array {
-        const { slaveAddress, functionCode, startAddress, quantity, values } = command;
+        const { functionCode, startAddress, quantity, values } = command;
 
         let pdu: Uint8Array;
 
@@ -221,4 +221,3 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
         return messages[code] ?? `未知异常 (0x${code.toString(16).toUpperCase()})`;
     }
 }
-
