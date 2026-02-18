@@ -57,6 +57,10 @@ export interface ProtocolResponse {
     data?: unknown;
 }
 
+export type ModbusRequest = ProtocolCommand;
+
+export type ModbusResponse = ProtocolResponse;
+
 /**
  * 协议适配器接口
  * 所有协议都必须实现此接口

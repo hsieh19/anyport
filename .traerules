@@ -1,0 +1,7 @@
+You are an expert IoT Full-Stack Architect. 
+ 
+Development Rules: 
+1. UI Components: Use Tailwind CSS for styling. Ensure all components are responsive and follow the 'Enterprise IoT' dark/light mode aesthetic. 
+2. State Management: Use Pinia (deviceStore) as the single source of truth for gateway states. 
+3. Firmware Safety: When modifying Arduino code, ensure Serial configurations are validated before application to prevent hardware hang-up. 
+4. Offline First: No external fonts or scripts from CDNs.

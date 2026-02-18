@@ -1,14 +1,26 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
-import { useDeviceStore, type ConnectionType, type Gateway } from '@/stores/deviceStore';
+import { useDeviceStore, type ConnectionType } from '@/stores/deviceStore';
 import { useProfileStore } from '@/stores/profileStore'; 
 import { ModbusFunctionCode } from '@/protocols/modbus';
 import type { ModbusRtuCommand } from '@/protocols/modbus';
 import { ProtocolType } from '@shared/types/protocol.types';
+import MqttConfigDialog from './MqttConfigDialog.vue';
+import GatewayManagerDialog from './GatewayManagerDialog.vue';
+import ModbusProfilePicker from './ModbusProfilePicker.vue';
 
 const deviceStore = useDeviceStore();
 const profileStore = useProfileStore();
 const isSecure = window.isSecureContext;
+
+// MQTT Broker 连接/断开
+async function toggleBrokerConnection() {
+  if (deviceStore.isMqttBrokerConnected) {
+    await deviceStore.disconnectBroker();
+  } else {
+    await deviceStore.connectMqttBroker();
+  }
+}
 
 // 初始化加载点表
 onMounted(() => {
@@ -240,11 +252,45 @@ const writeValues = ref('');
 
 // (已移除原处的 watch(selectedRegisterName)，移动到下方以确保 useBase1 已定义)
 
-// 连接配置
 const baudRate = ref(9600);
 const dataBits = ref(8);
 const stopBits = ref(1);
 const parity = ref<'none' | 'even' | 'odd'>('none');
+
+const showMqttDialog = ref(false);
+const showGatewayManager = ref(false);
+const selectedGatewayId = ref('');
+
+const tcpEndpoint = computed({
+  get: () => {
+    const target = deviceStore.gatewayOptions.tcpTarget;
+    if (!target.ip && !target.port) return '';
+    return target.port ? `${target.ip}:${target.port}` : target.ip;
+  },
+  set: (value: string) => {
+    const raw = value.trim();
+    const current = deviceStore.gatewayOptions.tcpTarget;
+    if (!raw) {
+      deviceStore.updateGatewayOptions({
+        tcpTarget: {
+          ...current,
+          ip: '',
+          port: current.port
+        }
+      });
+      return;
+    }
+    const [ipPart, portPart] = raw.split(':');
+    const parsedPort = portPart ? Number(portPart) : current.port;
+    deviceStore.updateGatewayOptions({
+      tcpTarget: {
+        ...current,
+        ip: ipPart.trim(),
+        port: Number.isFinite(parsedPort) ? parsedPort : current.port
+      }
+    });
+  }
+});
 
 const connectionType = computed<ConnectionType>({
   get: () => deviceStore.connectionType,
@@ -252,156 +298,88 @@ const connectionType = computed<ConnectionType>({
     deviceStore.setConnectionType(value);
     if (value === 'serial') {
       deviceStore.setModbusMode('rtu');
-    } else {
+    } else if (value === 'mqtt') {
       deviceStore.setModbusMode(deviceStore.gatewayOptions.protocol);
     }
+  }
+});
+
+const onlineGateways = computed(() =>
+  deviceStore.gateways.filter(g => g.online)
+);
+
+// 当前输入框配置对应的网关对象（用于状态指示器）
+const currentGateway = computed(() => {
+  const { siteId, gatewayId } = deviceStore.mqttConfig;
+  if (!siteId || !gatewayId) return null;
+  return deviceStore.gateways.find(g => g.siteId === siteId && g.gatewayId === gatewayId) ?? null;
+});
+
+// 根据 Site ID 输入筛选网关列表
+const filteredGateways = computed(() => {
+  const filterSite = (deviceStore.mqttConfig.siteId || '').trim().toLowerCase();
+  
+  // 如果没有输入筛选条件，显示所有网关
+  if (!filterSite) return deviceStore.gateways;
+
+  // 只要 Site ID 包含输入内容即匹配
+  return deviceStore.gateways.filter(g => 
+    g.siteId.toLowerCase().includes(filterSite)
+  );
+});
+
+// 网关状态 tooltip 文案
+const gatewayTooltip = computed(() => {
+  const gw = currentGateway.value;
+  if (!gw?.online) return '未发现网关或离线';
+
+  const parts: string[] = ['在线'];
+
+  if (gw.config?.version) parts.push(`v${gw.config.version}`);
+  if (deviceStore.gatewayOptions.protocol === 'tcp') {
+    if (gw.config?.ethIp) parts.push(`ETH: ${gw.config.ethIp}`);
+  } else {
+    if (gw.config?.baud) {
+      const p = gw.config.parity === 'even' ? 'E' : gw.config.parity === 'odd' ? 'O' : 'N';
+      const s = gw.config.stopBits ?? 1;
+      parts.push(`${gw.config.baud}-8${p}${s}`);
+    }
+  }
+  if (gw.config?.wifiIp) parts.push(`WiFi: ${gw.config.wifiIp}`);
+
+  return parts.join(' | ');
+});
+
+watch(
+  () => deviceStore.mqttConfig,
+  config => {
+    // store 变化时，尝试匹配已发现的网关，同步下拉框选中状态
+    if (config.siteId && config.gatewayId) {
+      const matched = `${config.siteId}/${config.gatewayId}`;
+      const exists = onlineGateways.value.some(g => g.id === matched);
+      selectedGatewayId.value = exists ? matched : '';
+    } else {
+      selectedGatewayId.value = '';
+    }
+  },
+  { deep: true, immediate: true }
+);
+
+// 从下拉列表选择网关时，自动填充 siteId / gatewayId 到 store
+watch(selectedGatewayId, value => {
+  if (!value) return;
+  const parts = value.split('/');
+  if (parts.length !== 2) return;
+  const [siteId, gatewayId] = parts;
+  // 仅当值真正变化时才写入，避免与上方 watch 循环触发
+  if (deviceStore.mqttConfig.siteId !== siteId || deviceStore.mqttConfig.gatewayId !== gatewayId) {
+    deviceStore.saveMqttConfig({ siteId, gatewayId });
   }
 });
 
 const modbusCommandTitle = computed(() =>
   deviceStore.modbusMode === 'rtu' ? 'Modbus RTU 命令' : 'Modbus TCP 命令'
 );
-
-const selectedGatewayId = ref<string>('');
-const isGatewayManagerOpen = ref(false);
-const editingGatewayId = ref<string | null>(null);
-const gatewayFormName = ref('');
-const gatewayFormHost = ref('');
-const gatewayFormPort = ref<number | null>(null);
-const gatewayFormError = ref('');
-
-const selectedGateway = computed<Gateway | null>(() => {
-  if (!selectedGatewayId.value) {
-    return null;
-  }
-  const found = deviceStore.gateways.find(g => g.id === selectedGatewayId.value);
-  return found || null;
-});
-
-const gatewayLatencyText = computed(() => {
-  if (!selectedGateway.value || typeof selectedGateway.value.latency !== 'number') {
-    return '--';
-  }
-  return `${selectedGateway.value.latency}ms`;
-});
-
-const gatewayTargetText = computed(() => {
-  const opts = deviceStore.gatewayOptions;
-  if (opts.protocol === 'tcp') {
-    const { ip, port, unitId } = opts.tcpTarget;
-    return `TCP ${ip}:${port} (Unit ID ${unitId})`;
-  }
-  const { slaveId, baudRate, dataBits, stopBits, parity } = opts.rtuTarget;
-  return `RTU Slave ${slaveId}, ${baudRate}bps, ${dataBits}N${parity === 'none' ? '' : parity === 'even' ? 'E' : 'O'}${stopBits}`;
-});
-
-function syncGatewayToOptions(gateway: Gateway): void {
-  deviceStore.updateGatewayOptions({
-    address: gateway.host,
-    wsPort: gateway.port,
-    tcpTarget: {
-      ...deviceStore.gatewayOptions.tcpTarget,
-      ip: gateway.host,
-      port: gateway.port
-    }
-  });
-}
-
-watch(
-  () => deviceStore.gateways.length,
-  length => {
-    if (length > 0 && !selectedGatewayId.value) {
-      const first = deviceStore.gateways[0];
-      if (first) {
-        selectedGatewayId.value = first.id;
-        syncGatewayToOptions(first);
-      }
-    }
-  },
-  { immediate: true }
-);
-
-watch(selectedGatewayId, id => {
-  const target = deviceStore.gateways.find(g => g.id === id);
-  if (target) {
-    syncGatewayToOptions(target);
-  }
-});
-
-function resetGatewayForm(target?: Gateway): void {
-  if (target) {
-    editingGatewayId.value = target.id;
-    gatewayFormName.value = target.name;
-    gatewayFormHost.value = target.host;
-    gatewayFormPort.value = target.port;
-  } else {
-    editingGatewayId.value = null;
-    gatewayFormName.value = '';
-    gatewayFormHost.value = '';
-    gatewayFormPort.value = null;
-  }
-  gatewayFormError.value = '';
-}
-
-function openGatewayManager(): void {
-  isGatewayManagerOpen.value = true;
-  if (selectedGateway.value) {
-    resetGatewayForm(selectedGateway.value);
-  } else {
-    resetGatewayForm();
-  }
-}
-
-function closeGatewayManager(): void {
-  isGatewayManagerOpen.value = false;
-}
-
-function handleSelectGatewayInList(gateway: Gateway): void {
-  selectedGatewayId.value = gateway.id;
-  resetGatewayForm(gateway);
-}
-
-function handleDeleteGateway(id: string): void {
-  deviceStore.deleteGateway(id);
-  if (selectedGatewayId.value === id) {
-    const first = deviceStore.gateways[0];
-    selectedGatewayId.value = first ? first.id : '';
-    if (first) {
-      syncGatewayToOptions(first);
-    }
-  }
-}
-
-function submitGatewayForm(): void {
-  const name = gatewayFormName.value.trim();
-  const host = gatewayFormHost.value.trim();
-  const port = gatewayFormPort.value ?? 0;
-  if (!name || !host || !port) {
-    gatewayFormError.value = '请填写完整的名称、地址和端口。';
-    return;
-  }
-  if (editingGatewayId.value) {
-    deviceStore.updateGateway(editingGatewayId.value, {
-      name,
-      host,
-      port
-    });
-    const updated = deviceStore.gateways.find(g => g.id === editingGatewayId.value);
-    if (updated) {
-      selectedGatewayId.value = updated.id;
-      syncGatewayToOptions(updated);
-    }
-  } else {
-    const created = deviceStore.addGateway({
-      name,
-      host,
-      port
-    });
-    selectedGatewayId.value = created.id;
-    syncGatewayToOptions(created);
-  }
-  gatewayFormError.value = '';
-}
 
 // 原始功能码选项定义
 const ALL_FUNCTION_CODES = [
@@ -453,19 +431,22 @@ const isSingleWrite = computed(() => {
 
 async function toggleConnection() {
   if (deviceStore.isConnected) {
-    await deviceStore.disconnect();
+    if (connectionType.value === 'mqtt') {
+      // MQTT 模式：断开网关连接，保持 Broker 连接以继续发现网关
+      await deviceStore.disconnectGateway();
+    } else {
+      await deviceStore.disconnect();
+    }
     return;
   }
 
-  if (connectionType.value === 'gateway') {
-    if (!selectedGatewayId.value) {
-      triggerAlert('请先选择一个网关或在“WiFi 网关”右侧添加网关。');
+  if (connectionType.value === 'mqtt') {
+    const opts = deviceStore.mqttConfig;
+    if (!opts.brokerUrl || !opts.topicPrefix || !opts.siteId || !opts.gatewayId) {
+      triggerAlert('请填写完整的 MQTT 配置信息：Broker URL、Topic Prefix、Site ID、Gateway ID。');
       return;
     }
-    await deviceStore.connect();
-    if (selectedGatewayId.value) {
-      await deviceStore.checkGatewayStatus(selectedGatewayId.value);
-    }
+    await deviceStore.connectMqtt();
     return;
   }
 
@@ -1057,14 +1038,42 @@ const latestReadResults = computed(() => {
       :type="dialogType"
       @close="showDialog = false"
     />
+    <MqttConfigDialog
+      :show="showMqttDialog"
+      @update:show="val => (showMqttDialog = val)"
+    />
+    <GatewayManagerDialog
+      :show="showGatewayManager"
+      @update:show="val => (showGatewayManager = val)"
+    />
+    <ModbusProfilePicker
+      :show="isProfilePickerShow"
+      @update:show="val => (isProfilePickerShow = val)"
+      @select="id => (selectedProfileId = id)"
+    />
     
     <!-- 顶部连接配置区 -->
     <section class="panel-section header-section">
       <div class="header-row">
-        <h2 class="section-title">
-          <span class="icon">🔌</span>
-          连接配置
-        </h2>
+        <div class="header-left-col">
+          <h2 class="section-title">
+            <span class="icon">🔌</span>
+            连接配置
+          </h2>
+          <!-- 状态摘要（移动到此处） -->
+          <div v-if="connectionType === 'mqtt'" class="header-status-summary">
+            <div class="status-row">
+              <span class="status-dot" :class="deviceStore.isMqttBrokerConnected ? 'dot-on' : 'dot-off'"></span>
+              <span class="status-label">Broker</span>
+              <span>: {{ deviceStore.isMqttBrokerConnected ? '已连接' : '未连接' }}</span>
+            </div>
+            <div class="status-row cursor-help" :title="currentGateway?.online ? gatewayTooltip : ''">
+              <span class="status-dot" :class="currentGateway?.online ? 'dot-on' : 'dot-off'"></span>
+              <span class="status-label">网关</span>
+              <span>: {{ currentGateway?.online ? '在线' : '离线' }}</span>
+            </div>
+          </div>
+        </div>
 
         <div class="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
           <div class="inline-flex rounded-full bg-slate-100 p-1 shadow-inner items-center gap-1">
@@ -1076,15 +1085,17 @@ const latestReadResults = computed(() => {
               USB 直连
             </button>
             <button
-              class="mode-tab mode-tab-gateway"
-              :class="{ active: connectionType === 'gateway' }"
-              @click="connectionType = 'gateway'"
+              class="mode-tab"
+              :class="{ active: connectionType === 'mqtt' }"
+              @click="connectionType = 'mqtt'"
             >
-              WiFi 网关
+              <span>Remote MQTT</span>
               <span
-                class="gateway-settings-icon"
-                @click.stop="openGatewayManager"
-                title="管理网关"
+                class="ml-1 cursor-pointer"
+                @click.stop="
+                  connectionType = 'mqtt';
+                  showMqttDialog = true;
+                "
               >
                 ⚙
               </span>
@@ -1093,70 +1104,106 @@ const latestReadResults = computed(() => {
 
           <div class="config-bar">
             <div
-              class="config-group flex flex-nowrap items-center gap-2"
-              v-if="connectionType === 'gateway'"
+              class="config-group flex flex-wrap md:flex-nowrap items-center gap-2 flex-1"
+              v-if="connectionType === 'mqtt'"
             >
-              <select
-                v-model="selectedGatewayId"
-                :disabled="deviceStore.isConnected || !deviceStore.gateways.length"
-                class="gateway-select flex-1 min-w-0"
-              >
-                <option value="" disabled>
-                  {{ deviceStore.gateways.length ? '请选择网关' : '暂无网关，点击右侧设置添加' }}
-                </option>
-                <option
-                  v-for="g in deviceStore.gateways"
-                  :key="g.id"
-                  :value="g.id"
-                  :style="{ color: g.status === 'online' ? '#16a34a' : '#9ca3af' }"
+              <!-- 网关下拉 + 管理按钮 -->
+              <div class="gateway-select-wrap">
+                <select
+                  v-model="selectedGatewayId"
+                  :disabled="deviceStore.isConnected || deviceStore.gateways.length === 0"
+                  class="gateway-select"
                 >
-                  ● {{ g.name }} ({{ g.host }}:{{ g.port }}){{ typeof g.latency === 'number' ? ` ${g.latency}ms` : '' }}
-                </option>
-              </select>
+                  <option value="" disabled v-if="deviceStore.gateways.length === 0">
+                    未发现网关
+                  </option>
+                  <option value="" v-else>
+                    手动指定网关
+                  </option>
+                  <option
+                    v-for="g in filteredGateways"
+                    :key="g.id"
+                    :value="`${g.siteId}/${g.gatewayId}`"
+                    :disabled="!g.online"
+                  >
+                    {{ g.online ? '●' : '○' }} {{ g.siteId }} / {{ g.gatewayId }}{{ g.online ? '' : ' (离线)' }}
+                  </option>
+                </select>
 
-              <div class="base-switch">
+                <!-- 管理按钮：有网关时显示 -->
                 <button
-                  :class="{ active: deviceStore.gatewayOptions.protocol === 'tcp' }"
-                  :disabled="deviceStore.isConnected"
-                  @click="deviceStore.updateGatewayOptions({ protocol: 'tcp' }); deviceStore.setModbusMode('tcp')"
+                  v-if="deviceStore.gateways.length > 0"
+                  class="btn-manage-gateways"
+                  title="管理网关列表"
+                  @click="showGatewayManager = true"
                 >
-                  TCP
-                </button>
-                <button
-                  :class="{ active: deviceStore.gatewayOptions.protocol === 'rtu' }"
-                  :disabled="deviceStore.isConnected"
-                  @click="deviceStore.updateGatewayOptions({ protocol: 'rtu' }); deviceStore.setModbusMode('rtu')"
-                >
-                  RTU
+                  ⚙
                 </button>
               </div>
 
-              <template v-if="deviceStore.gatewayOptions.protocol === 'tcp'">
+              <!-- 网关在线状态指示器 + Site ID / Gateway ID 输入框 -->
+              <div class="gateway-id-inputs">
                 <input
                   type="text"
-                  v-model="deviceStore.gatewayOptions.tcpTarget.ip"
+                  class="gateway-id-input"
                   :disabled="deviceStore.isConnected"
-                  placeholder="设备 IP"
-                  class="w-32"
+                  :value="deviceStore.mqttConfig.siteId"
+                  placeholder="Site ID"
+                  @input="(e) => {
+                    deviceStore.saveMqttConfig({ siteId: (e.target as HTMLInputElement).value });
+                    selectedGatewayId = '';
+                  }"
                 />
+                <span class="gateway-id-sep">/</span>
                 <input
-                  type="number"
-                  v-model.number="deviceStore.gatewayOptions.tcpTarget.port"
+                  type="text"
+                  class="gateway-id-input"
                   :disabled="deviceStore.isConnected"
-                  placeholder="端口"
-                  class="w-20"
+                  :value="deviceStore.mqttConfig.gatewayId"
+                  placeholder="Gateway ID"
+                  @input="(e) => {
+                    deviceStore.saveMqttConfig({ gatewayId: (e.target as HTMLInputElement).value });
+                    selectedGatewayId = '';
+                  }"
                 />
-                <input
-                  type="number"
-                  v-model.number="deviceStore.gatewayOptions.tcpTarget.unitId"
-                  :disabled="deviceStore.isConnected"
-                  placeholder="Slave ID"
-                  class="w-20"
-                />
-              </template>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <div class="base-switch">
+                  <button
+                    :class="{ active: deviceStore.gatewayOptions.protocol === 'tcp' }"
+                    :disabled="deviceStore.isConnected"
+                    @click="
+                      deviceStore.updateGatewayOptions({ protocol: 'tcp' });
+                      deviceStore.setModbusMode('tcp');
+                    "
+                  >
+                    TCP
+                  </button>
+                  <button
+                    :class="{ active: deviceStore.gatewayOptions.protocol === 'rtu' }"
+                    :disabled="deviceStore.isConnected"
+                    @click="
+                      deviceStore.updateGatewayOptions({ protocol: 'rtu' });
+                      deviceStore.setModbusMode('rtu');
+                    "
+                  >
+                    RTU
+                  </button>
+                </div>
+              </div>
 
-              <template v-else>
-                <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2 flex-1 min-w-[220px]">
+                <template v-if="deviceStore.gatewayOptions.protocol === 'tcp'">
+                  <input
+                    type="text"
+                    v-model="tcpEndpoint"
+                    :disabled="deviceStore.isConnected"
+                    placeholder="IP:Port"
+                    class="flex-1"
+                  />
+                </template>
+
+                <template v-else>
                   <select
                     v-model.number="deviceStore.gatewayOptions.rtuTarget.baudRate"
                     :disabled="deviceStore.isConnected"
@@ -1170,7 +1217,7 @@ const latestReadResults = computed(() => {
                   <select
                     v-model="deviceStore.gatewayOptions.rtuTarget.dataBits"
                     :disabled="deviceStore.isConnected"
-                    class="w-24"
+                    class="w-20"
                   >
                     <option :value="7">7 数据位</option>
                     <option :value="8">8 数据位</option>
@@ -1188,14 +1235,14 @@ const latestReadResults = computed(() => {
                   <select
                     v-model="deviceStore.gatewayOptions.rtuTarget.parity"
                     :disabled="deviceStore.isConnected"
-                    class="w-28"
+                    class="w-24"
                   >
                     <option value="none">无校验</option>
                     <option value="even">偶校验</option>
                     <option value="odd">奇校验</option>
                   </select>
-                </div>
-              </template>
+                </template>
+              </div>
             </div>
 
             <div class="config-group" v-else>
@@ -1222,28 +1269,35 @@ const latestReadResults = computed(() => {
               </select>
             </div>
 
+            <!-- MQTT 模式：Broker 连接状态条 -->
+            <div v-if="connectionType === 'mqtt'" class="broker-status-bar">
+              <button
+                class="btn-broker"
+                :class="{ connected: deviceStore.isMqttBrokerConnected }"
+                :disabled="deviceStore.isMqttBrokerConnecting || deviceStore.isConnected"
+                @click="toggleBrokerConnection"
+              >
+                <span v-if="deviceStore.isMqttBrokerConnecting" class="spinner"></span>
+                {{ deviceStore.isMqttBrokerConnected ? '断开 Broker' : '连接 Broker' }}
+              </button>
+            </div>
+
             <button 
-              class="btn-connect"
-              :class="{ connected: deviceStore.isConnected, connecting: deviceStore.isConnecting }"
-              :disabled="deviceStore.isConnecting || (!deviceStore.isSupported && connectionType === 'serial')"
+              :class="[
+                'btn-connect',
+                { 'min-w-[96px] md:min-w-[110px]': connectionType === 'mqtt' },
+                { connected: deviceStore.isConnected, connecting: deviceStore.isConnecting }
+              ]"
+              :disabled="deviceStore.isConnecting || (!deviceStore.isSupported && connectionType === 'serial') || (connectionType === 'mqtt' && !deviceStore.isMqttBrokerConnected && !deviceStore.isConnected)"
               @click="toggleConnection"
             >
               <span v-if="deviceStore.isConnecting" class="spinner"></span>
-              {{ deviceStore.isConnected ? '断开' : '连接' }}
+              {{ deviceStore.isConnected ? '断开网关' : '连接网关' }}
             </button>
           </div>
         </div>
       </div>
       
-      <div
-        v-if="connectionType === 'gateway' && deviceStore.isConnected && selectedGateway"
-        class="info-banner"
-      >
-        ✅ 已连接网关：
-        {{ selectedGateway.name }} ({{ selectedGateway.host }}:{{ selectedGateway.port }})
-        ｜ 延迟 {{ gatewayLatencyText }}
-        ｜ 目标 {{ gatewayTargetText }}
-      </div>
       <div v-if="connectionType === 'serial' && !isSecure" class="error-banner">
         ❌ 检测到非安全上下文。Web Serial API 需要 <strong>HTTPS</strong> 或 <strong>localhost</strong>。不允许使用 IP 地址访问。
       </div>
@@ -1586,96 +1640,6 @@ const latestReadResults = computed(() => {
       </div> <!-- closes monitor-grid -->
     </div> <!-- closes panel-body -->
 
-    <div v-if="isGatewayManagerOpen" class="modal-overlay" @click.self="closeGatewayManager">
-      <div class="modal-content gateway-manager">
-        <div class="modal-header">
-          <h3>WiFi 网关管理</h3>
-          <button class="btn-close" @click="closeGatewayManager">×</button>
-        </div>
-        <div class="modal-body gateway-manager-body">
-          <div class="gateway-list">
-            <div v-if="deviceStore.gateways.length === 0" class="empty-state">
-              暂无网关，请在右侧表单中新建。
-            </div>
-            <div
-              v-for="g in deviceStore.gateways"
-              :key="g.id"
-              class="gateway-item"
-              :class="{ active: selectedGatewayId === g.id }"
-              @click="handleSelectGatewayInList(g)"
-            >
-              <span
-                class="status-dot"
-                :class="g.status === 'online' ? 'online' : 'offline'"
-              ></span>
-              <div class="g-main">
-                <div class="g-name">{{ g.name }}</div>
-                <div class="g-sub">
-                  {{ g.host }}:{{ g.port }}
-                  <span v-if="typeof g.latency === 'number'" class="g-latency">
-                    {{ g.latency }}ms
-                  </span>
-                  <span v-else class="g-latency g-latency-na">--</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                class="btn-ghost"
-                @click.stop="deviceStore.checkGatewayStatus(g.id)"
-              >
-                检测
-              </button>
-              <button
-                type="button"
-                class="btn-ghost danger"
-                @click.stop="handleDeleteGateway(g.id)"
-              >
-                删除
-              </button>
-            </div>
-          </div>
-          <div class="gateway-form">
-            <div class="form-row">
-              <label>名称</label>
-              <input
-                v-model="gatewayFormName"
-                type="text"
-                placeholder="例如：车间网关"
-              />
-            </div>
-            <div class="form-row">
-              <label>地址(IP 或域名)</label>
-              <input
-                v-model="gatewayFormHost"
-                type="text"
-                placeholder="anyport.local 或 192.168.1.10"
-              />
-            </div>
-            <div class="form-row">
-              <label>端口</label>
-              <input
-                v-model.number="gatewayFormPort"
-                type="number"
-                min="1"
-                max="65535"
-              />
-            </div>
-            <div v-if="gatewayFormError" class="gateway-form-error">
-              {{ gatewayFormError }}
-            </div>
-            <div class="form-actions">
-              <button type="button" class="btn-secondary" @click="resetGatewayForm()">
-                新建
-              </button>
-              <button type="button" class="btn-primary" @click="submitGatewayForm">
-                {{ editingGatewayId ? '保存修改' : '添加网关' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- 点表选择弹窗 (简易版) -->
     <div v-if="isProfilePickerShow" class="modal-overlay" @click.self="isProfilePickerShow = false">
       <div class="modal-content profile-picker">
@@ -1853,6 +1817,20 @@ const latestReadResults = computed(() => {
   background: var(--color-bg);
 }
 
+.config-bar .base-switch {
+  height: 2.4rem;
+  align-items: stretch;
+  padding: 0;
+}
+
+.config-bar .base-switch button {
+  height: 100%;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  border-radius: 0;
+}
+
 .gateway-config-box {
   background: rgba(0, 0, 0, 0.02);
   padding: 0.8rem;
@@ -1957,9 +1935,9 @@ const latestReadResults = computed(() => {
 }
 
 .btn-connect.connected {
-  background: var(--color-surface-hover);
-  border: 1px solid var(--color-error);
-  color: var(--color-error);
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  border: none;
+  color: #ffffff;
 }
 
 /* 主体垂直排列 */
@@ -3106,5 +3084,228 @@ const latestReadResults = computed(() => {
 .toast-leave-to {
   opacity: 0;
   transform: translateY(-20px) scale(0.9);
+}
+
+/* Broker 连接状态条 */
+.broker-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.broker-status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.broker-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.broker-dot-on  { background: #10b981; animation: gateway-pulse 2s ease-in-out infinite; }
+.broker-dot-off { background: #9ca3af; }
+
+.broker-status-label {
+  font-size: 0.75rem;
+  color: #6b7280;
+  white-space: nowrap;
+}
+
+.btn-broker {
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1.5px solid #3b82f6;
+  color: #3b82f6;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+.btn-broker:hover:not(:disabled) {
+  background: #3b82f6;
+  color: #fff;
+}
+.btn-broker.connected {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+.btn-broker.connected:hover:not(:disabled) {
+  background: #ef4444;
+  color: #fff;
+}
+.btn-broker:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 网关状态指示器 */
+.gateway-status-dot-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  cursor: default;
+  padding: 0 0.25rem;
+}
+
+.gateway-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-online {
+  background: #10b981;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6);
+  animation: gateway-pulse 2s ease-in-out infinite;
+}
+
+.dot-offline {
+  background: #9ca3af;
+}
+
+@keyframes gateway-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+  60%  { box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.gateway-status-text {
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.text-online  { color: #059669; }
+.text-offline { color: #9ca3af; }
+
+/* Gateway ID 内联输入框组 */
+.gateway-id-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.gateway-id-input {
+  width: 5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #111827;
+  background: #ffffff;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.gateway-id-input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.gateway-id-input:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.gateway-id-sep {
+  font-size: 1rem;
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+/* 网关下拉容器 */
+.gateway-select-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 180px;
+  max-width: 220px;
+  flex: 1;
+}
+
+.gateway-select {
+  flex: 1;
+  width: 0; /* 让 flex 生效 */
+}
+
+.btn-manage-gateways {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 0.9rem;
+}
+.btn-manage-gateways:hover {
+  background: #f3f4f6;
+  color: #3b82f6;
+  border-color: #d1d5db;
+}
+
+
+
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+}
+
+.header-left-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 140px;
+}
+
+.header-status-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.72rem;
+  color: #6b7280;
+  padding-left: 2px;
+  margin-top: 2px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-label {
+  display: inline-block;
+  width: 40px;
+  text-align: justify;
+  text-align-last: justify;
 }
 </style>

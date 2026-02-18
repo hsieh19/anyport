@@ -5,46 +5,28 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { WebSerialTransport } from '@/transports/WebSerialTransport';
-import { WebSocketGatewayTransport } from '@/transports/WebSocketGatewayTransport';
+import { MqttTransport } from '@/transports/MqttTransport';
 import { ModbusRtuAdapter, ModbusTcpAdapter } from '@/protocols/modbus';
-import type { ConnectionConfig } from '@shared/types/transport.types';
+import { type ConnectionConfig } from '@shared/types/transport.types';
 import { FrameCheckResult, type IProtocolAdapter } from '@shared/types/protocol.types';
 import type { ModbusRtuCommand, ModbusRtuResponse } from '@/protocols/modbus';
 
 // 物理连接通道
-export type ConnectionType = 'serial' | 'gateway';
+export type ConnectionType = 'serial' | 'mqtt';
 
-// 网关转发目标协议
-export type GatewayProtocol = 'tcp' | 'rtu';
-
-// 网关配置结构
+// 网关配置结构（下游 Modbus 目标配置）
 export interface GatewayConfig {
-    address: string;
-    wsPort?: number;
-    protocol: GatewayProtocol;
+    protocol: 'tcp' | 'rtu';
     tcpTarget: {
         ip: string;
         port: number;
-        unitId: number;
     };
     rtuTarget: {
-        slaveId: number;
         baudRate: number;
         dataBits: 8;
         stopBits: 1 | 2;
         parity: 'none' | 'even' | 'odd';
     };
-}
-
-export type GatewayStatus = 'online' | 'offline';
-
-export interface Gateway {
-    id: string;
-    name: string;
-    host: string;
-    port: number;
-    status: GatewayStatus;
-    latency: number | null;
 }
 
 /**
@@ -64,110 +46,150 @@ type ModbusMode = 'rtu' | 'tcp';
 interface ModbusTcpOptions {
     ip: string;
     port: number;
-    unitId: number;
 }
 
-const GATEWAYS_STORAGE_KEY = 'anyport_gateways';
-
-function loadGatewaysFromStorage(): Gateway[] {
-    if (typeof window === 'undefined') {
-        return [];
-    }
-    const raw = window.localStorage.getItem(GATEWAYS_STORAGE_KEY);
-    if (!raw) {
-        return [];
-    }
-    try {
-        const parsed = JSON.parse(raw) as Gateway[];
-        if (!Array.isArray(parsed)) {
-            return [];
-        }
-        return parsed
-            .map(item => ({
-                id: item.id,
-                name: item.name,
-                host: item.host,
-                port: item.port,
-                status: (item.status === 'online' ? 'online' : 'offline') as GatewayStatus,
-                latency: typeof item.latency === 'number' ? item.latency : null
-            }))
-            .filter(g => !!g.id && !!g.host);
-    } catch {
-        return [];
-    }
+interface MqttConfig {
+    brokerUrl: string;
+    username: string;
+    password: string;
+    clientId: string;
+    topicPrefix: string;
+    siteId: string;
+    gatewayId: string;
 }
 
-function saveGatewaysToStorage(list: Gateway[]): void {
-    if (typeof window === 'undefined') {
-        return;
-    }
-    try {
-        window.localStorage.setItem(GATEWAYS_STORAGE_KEY, JSON.stringify(list));
-    } catch {
-    }
+interface DiscoveredGateway {
+    id: string;
+    siteId: string;
+    gatewayId: string;
+    online: boolean;
+    lastSeen: number;
+    config?: {
+        version?: string;
+        baud?: number;
+        parity?: string;
+        stopBits?: number;
+        ethIp?: string;   // W5500 以太网 IP
+        wifiIp?: string;  // WiFi IP
+    };
 }
 
 export const useDeviceStore = defineStore('device', () => {
     // 状态
     const transport = ref<WebSerialTransport | null>(null);
-    const gatewayTransport = ref<WebSocketGatewayTransport | null>(null);
+    const mqttTransport = ref<MqttTransport | null>(null);
     const rtuAdapter = new ModbusRtuAdapter();
     const tcpAdapter = new ModbusTcpAdapter();
     const adapter = ref<IProtocolAdapter<ModbusRtuCommand, ModbusRtuResponse>>(rtuAdapter);
     const isConnected = ref(false);
     const isConnecting = ref(false);
+    const isMqttBrokerConnected = ref(false);  // MQTT Broker 连接状态（独立于网关连接）
+    const isMqttBrokerConnecting = ref(false);
     const lastError = ref<string | null>(null);
     const logs = ref<LogEntry[]>([]);
     const receiveBuffer = ref<Uint8Array>(new Uint8Array(0));
     const modbusMode = ref<ModbusMode>('rtu');
     const tcpOptions = ref<ModbusTcpOptions>({
         ip: '127.0.0.1',
-        port: 502,
-        unitId: 1
+        port: 502
+    });
+    const mqttConfig = ref<MqttConfig>({
+        brokerUrl: 'wss://broker.emqx.io:8084/mqtt',
+        username: '',
+        password: '',
+        clientId: '',
+        topicPrefix: 'anyport',
+        siteId: '',
+        gatewayId: ''
     });
     const connectionType = ref<ConnectionType>('serial');
     const gatewayOptions = ref<GatewayConfig>({
-        address: 'anyport.local',
-        wsPort: 81,
         protocol: 'tcp',
         tcpTarget: {
             ip: '192.168.1.5',
-            port: 502,
-            unitId: 1
+            port: 502
         },
         rtuTarget: {
-            slaveId: 1,
             baudRate: 9600,
             dataBits: 8,
             stopBits: 1,
             parity: 'none'
         }
     });
-    const gateways = ref<Gateway[]>(loadGatewaysFromStorage());
+    const gateways = ref<DiscoveredGateway[]>([]);
 
-    function addGateway(input: { id?: string; name: string; host: string; port: number }): Gateway {
-        const id = input.id || (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
-        const gateway: Gateway = {
-            id,
-            name: input.name,
-            host: input.host,
-            port: input.port,
-            status: 'offline',
-            latency: null
-        };
-        gateways.value = [...gateways.value, gateway];
-        saveGatewaysToStorage(gateways.value);
-        return gateway;
+    const GATEWAY_OFFLINE_TIMEOUT_MS = 30000;
+    let gatewayHeartbeatTimer: number | null = null;
+
+    function updateGatewayStatus(
+        siteId: string,
+        gatewayId: string,
+        online: boolean,
+        timestamp: number,
+        config?: { version?: string; baud?: number; parity?: string; stopBits?: number }
+    ): void {
+        const id = `${siteId}/${gatewayId}`;
+        const existingIndex = gateways.value.findIndex(g => g.id === id);
+        if (existingIndex === -1) {
+            gateways.value = [
+                ...gateways.value,
+                {
+                    id,
+                    siteId,
+                    gatewayId,
+                    online,
+                    lastSeen: timestamp,
+                    config
+                }
+            ];
+        } else {
+            const current = gateways.value[existingIndex]!;
+            gateways.value.splice(existingIndex, 1, {
+                ...current,
+                online,
+                lastSeen: timestamp,
+                // config 有新值时更新，没有则保留旧值
+                config: config ?? current.config
+            });
+        }
     }
 
-    function updateGateway(id: string, updates: Partial<Omit<Gateway, 'id'>>): void {
-        gateways.value = gateways.value.map(g => (g.id === id ? { ...g, ...updates } : g));
-        saveGatewaysToStorage(gateways.value);
+    function startGatewayHeartbeatMonitor(): void {
+        if (gatewayHeartbeatTimer !== null) {
+            return;
+        }
+        gatewayHeartbeatTimer = window.setInterval(() => {
+            const now = Date.now();
+            let changed = false;
+            const next: DiscoveredGateway[] = gateways.value.map(gateway => {
+                if (gateway.online && now - gateway.lastSeen > GATEWAY_OFFLINE_TIMEOUT_MS) {
+                    changed = true;
+                    return {
+                        ...gateway,
+                        online: false
+                    };
+                }
+                return gateway;
+            });
+            if (changed) {
+                gateways.value = next;
+            }
+        }, 5000);
     }
 
-    function deleteGateway(id: string): void {
+    function removeGateway(id: string): void {
         gateways.value = gateways.value.filter(g => g.id !== id);
-        saveGatewaysToStorage(gateways.value);
+    }
+
+    function clearOfflineGateways(): void {
+        gateways.value = gateways.value.filter(g => g.online);
+    }
+
+    function updateGatewayOptions(options: Partial<GatewayConfig>): void {
+        gatewayOptions.value = {
+            ...gatewayOptions.value,
+            ...options
+        };
     }
 
     // 连接配置
@@ -192,10 +214,10 @@ export const useDeviceStore = defineStore('device', () => {
 
         try {
             if (connectionType.value === 'serial') {
-                if (gatewayTransport.value && gatewayTransport.value.isConnected) {
-                    await gatewayTransport.value.disconnect();
+                if (mqttTransport.value && mqttTransport.value.isConnected) {
+                    await mqttTransport.value.disconnect();
                 }
-                gatewayTransport.value = null;
+                mqttTransport.value = null;
 
                 const instance = new WebSerialTransport();
                 transport.value = instance;
@@ -206,61 +228,194 @@ export const useDeviceStore = defineStore('device', () => {
 
                 await instance.connect(connectionConfig.value);
                 isConnected.value = true;
-            } else {
-                if (transport.value && transport.value.isConnected) {
-                    await transport.value.disconnect();
-                }
-                transport.value = null;
-
-                const instance = new WebSocketGatewayTransport();
-                gatewayTransport.value = instance;
-
-                instance.onData(handleData);
-                instance.onError(handleError);
-                instance.onStateChange(handleGatewayStateChange);
-
-                await instance.connect(gatewayOptions.value);
-                isConnected.value = true;
             }
         } catch (error) {
             lastError.value = error instanceof Error ? error.message : String(error);
             transport.value = null;
-            gatewayTransport.value = null;
+            mqttTransport.value = null;
             isConnected.value = false;
         } finally {
             isConnecting.value = false;
         }
     }
 
+    // 连接 MQTT Broker（只订阅通配符，用于自动发现网关，不影响 isConnected）
+    async function connectMqttBroker(): Promise<void> {
+        if (isMqttBrokerConnected.value || isMqttBrokerConnecting.value) return;
+
+        isMqttBrokerConnecting.value = true;
+        lastError.value = null;
+
+        try {
+            // 如果已有旧连接，先断开
+            if (mqttTransport.value) {
+                await mqttTransport.value.disconnect();
+                mqttTransport.value = null;
+            }
+            isConnected.value = false;
+
+            const instance = new MqttTransport();
+            mqttTransport.value = instance;
+
+            instance.onData(handleData);
+            instance.onError(handleError);
+            instance.onStateChange(connected => {
+                isMqttBrokerConnected.value = connected;
+                if (!connected) {
+                    isConnected.value = false;
+                    if (mqttTransport.value === instance) {
+                        mqttTransport.value = null;
+                    }
+                    receiveBuffer.value = new Uint8Array(0);
+                }
+            });
+            instance.onGatewayStatus(info => {
+                updateGatewayStatus(info.siteId, info.gatewayId, info.online, info.timestamp, info.config);
+            });
+
+            const opts = mqttConfig.value;
+            // Broker 连接阶段：siteId/gatewayId 用占位符，只订阅通配符
+            const config: ConnectionConfig = {
+                mqtt: {
+                    brokerUrl: opts.brokerUrl,
+                    username: opts.username,
+                    password: opts.password,
+                    siteId: opts.siteId || '_',
+                    gatewayId: opts.gatewayId || '_',
+                    topicPrefix: opts.topicPrefix,
+                    clientId: opts.clientId || `anyport-web-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 8)}`
+                }
+            };
+
+            await instance.connect(config);
+            isMqttBrokerConnected.value = true;
+        } catch (error) {
+            lastError.value = error instanceof Error ? error.message : String(error);
+            mqttTransport.value = null;
+            isMqttBrokerConnected.value = false;
+        } finally {
+            isMqttBrokerConnecting.value = false;
+        }
+    }
+
+    // 连接网关（在 Broker 已连的基础上，重连并绑定具体 siteId/gatewayId）
+    async function connectMqtt(): Promise<void> {
+        if (isConnected.value || isConnecting.value) return;
+        if (!isMqttBrokerConnected.value) {
+            // Broker 未连，先连 Broker 再连网关
+            await connectMqttBroker();
+            if (!isMqttBrokerConnected.value) return;
+        }
+
+        isConnecting.value = true;
+        lastError.value = null;
+
+        try {
+            // 断开旧连接，用正确的 siteId/gatewayId 重新连接
+            if (mqttTransport.value) {
+                await mqttTransport.value.disconnect();
+                mqttTransport.value = null;
+            }
+            isMqttBrokerConnected.value = false;
+
+            const instance = new MqttTransport();
+            mqttTransport.value = instance;
+
+            instance.onData(handleData);
+            instance.onError(handleError);
+            instance.onStateChange(connected => {
+                isMqttBrokerConnected.value = connected;
+                isConnected.value = connected;
+                if (!connected && mqttTransport.value === instance) {
+                    mqttTransport.value = null;
+                    receiveBuffer.value = new Uint8Array(0);
+                }
+            });
+            instance.onGatewayStatus(info => {
+                updateGatewayStatus(info.siteId, info.gatewayId, info.online, info.timestamp, info.config);
+            });
+
+            const opts = mqttConfig.value;
+            const config: ConnectionConfig = {
+                mqtt: {
+                    brokerUrl: opts.brokerUrl,
+                    username: opts.username,
+                    password: opts.password,
+                    siteId: opts.siteId,
+                    gatewayId: opts.gatewayId,
+                    topicPrefix: opts.topicPrefix,
+                    clientId: opts.clientId || `anyport-web-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 8)}`
+                }
+            };
+
+            await instance.connect(config);
+            isMqttBrokerConnected.value = true;
+            isConnected.value = true;
+        } catch (error) {
+            lastError.value = error instanceof Error ? error.message : String(error);
+            mqttTransport.value = null;
+            isMqttBrokerConnected.value = false;
+            isConnected.value = false;
+        } finally {
+            isConnecting.value = false;
+        }
+    }
+
+    async function disconnectGateway(): Promise<void> {
+        if (!isConnected.value) return;
+        // 断开网关连接，但保持 Broker 连接（重新以通配符模式连接）
+        isConnected.value = false;
+        isMqttBrokerConnected.value = false;
+        if (mqttTransport.value) {
+            await mqttTransport.value.disconnect();
+            mqttTransport.value = null;
+        }
+        receiveBuffer.value = new Uint8Array(0);
+        // 自动重连 Broker 以继续发现网关
+        connectMqttBroker().catch(() => { });
+    }
+
+    async function disconnectBroker(): Promise<void> {
+        isConnected.value = false;
+        isMqttBrokerConnected.value = false;
+        if (mqttTransport.value) {
+            await mqttTransport.value.disconnect();
+            mqttTransport.value = null;
+        }
+        receiveBuffer.value = new Uint8Array(0);
+        gateways.value = [];
+    }
+
     async function disconnect(): Promise<void> {
-        if (!transport.value && !gatewayTransport.value) return;
+        if (!transport.value && !mqttTransport.value) return;
 
         try {
             if (transport.value) {
                 await transport.value.disconnect();
             }
-            if (gatewayTransport.value) {
-                await gatewayTransport.value.disconnect();
+            if (mqttTransport.value) {
+                await mqttTransport.value.disconnect();
             }
         } catch (error) {
             console.error('断开连接失败:', error);
         } finally {
             transport.value = null;
-            gatewayTransport.value = null;
+            mqttTransport.value = null;
             isConnected.value = false;
+            isMqttBrokerConnected.value = false;
             receiveBuffer.value = new Uint8Array(0);
         }
     }
 
     async function sendCommand(command: ModbusRtuCommand): Promise<ModbusRtuResponse | null> {
         const serialInstance = transport.value;
-        const gatewayInstance = gatewayTransport.value;
+        const mqttInstance = mqttTransport.value;
 
         const activeTransport =
             serialInstance && serialInstance.isConnected
                 ? serialInstance
-                : gatewayInstance && gatewayInstance.isConnected
-                    ? gatewayInstance
+                : mqttInstance && mqttInstance.isConnected
+                    ? mqttInstance
                     : null;
 
         if (!activeTransport || !isConnected.value) {
@@ -268,7 +423,27 @@ export const useDeviceStore = defineStore('device', () => {
         }
 
         const frame = adapter.value.encode(command);
-        await activeTransport.send(frame);
+
+        if (mqttInstance && activeTransport === mqttInstance) {
+            const target = gatewayOptions.value;
+            const payloadTarget = {
+                protocol: target.protocol,
+                tcpTarget: {
+                    ip: target.tcpTarget.ip,
+                    port: target.tcpTarget.port
+                },
+                rtuTarget: {
+                    baudRate: target.rtuTarget.baudRate,
+                    dataBits: target.rtuTarget.dataBits,
+                    stopBits: target.rtuTarget.stopBits,
+                    parity: target.rtuTarget.parity
+                }
+            };
+
+            await (mqttInstance as any).sendWithTarget(frame, payloadTarget);
+        } else {
+            await activeTransport.send(frame);
+        }
 
         addLog('tx', frame);
 
@@ -311,14 +486,6 @@ export const useDeviceStore = defineStore('device', () => {
         }
     }
 
-    function handleGatewayStateChange(connected: boolean): void {
-        isConnected.value = connected;
-        if (!connected) {
-            gatewayTransport.value = null;
-            receiveBuffer.value = new Uint8Array(0);
-        }
-    }
-
     function addLog(direction: 'tx' | 'rx', data: Uint8Array, parsed?: ModbusRtuResponse): void {
         const entry: LogEntry = {
             id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
@@ -354,94 +521,29 @@ export const useDeviceStore = defineStore('device', () => {
         };
     }
 
+    function saveMqttConfig(config: Partial<MqttConfig>): void {
+        mqttConfig.value = {
+            ...mqttConfig.value,
+            ...config
+        };
+    }
+
     function setModbusMode(mode: ModbusMode): void {
         modbusMode.value = mode;
         adapter.value = mode === 'rtu' ? rtuAdapter : tcpAdapter;
-    }
-
-    function updateTcpOptions(options: Partial<ModbusTcpOptions>): void {
-        tcpOptions.value = {
-            ...tcpOptions.value,
-            ...options
-        };
     }
 
     function setConnectionType(type: ConnectionType): void {
         connectionType.value = type;
     }
 
-    function updateGatewayOptions(options: Partial<GatewayConfig>): void {
-        gatewayOptions.value = {
-            ...gatewayOptions.value,
-            ...options
-        };
-    }
-
-    async function checkGatewayStatus(id: string): Promise<void> {
-        const target = gateways.value.find(g => g.id === id);
-        if (!target) {
-            return;
-        }
-        const start = performance.now();
-        let url = target.host;
-        if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
-            url = `ws://${target.host}:${target.port}`;
-        }
-        await new Promise<void>(resolve => {
-            let settled = false;
-            try {
-                const ws = new WebSocket(url);
-                const timeoutId = window.setTimeout(() => {
-                    if (settled) {
-                        return;
-                    }
-                    settled = true;
-                    ws.close();
-                    updateGateway(id, { status: 'offline', latency: null });
-                    resolve();
-                }, 5000);
-                ws.onopen = () => {
-                    if (settled) {
-                        return;
-                    }
-                    const latency = Math.round(performance.now() - start);
-                    settled = true;
-                    window.clearTimeout(timeoutId);
-                    updateGateway(id, { status: 'online', latency });
-                    ws.close();
-                    resolve();
-                };
-                ws.onerror = () => {
-                    if (settled) {
-                        return;
-                    }
-                    settled = true;
-                    window.clearTimeout(timeoutId);
-                    updateGateway(id, { status: 'offline', latency: null });
-                    resolve();
-                };
-                ws.onclose = () => {
-                    if (settled) {
-                        return;
-                    }
-                    settled = true;
-                    window.clearTimeout(timeoutId);
-                    updateGateway(id, { status: 'offline', latency: null });
-                    resolve();
-                };
-            } catch {
-                if (!settled) {
-                    updateGateway(id, { status: 'offline', latency: null });
-                    resolve();
-                }
-            }
-        });
-    }
+    startGatewayHeartbeatMonitor();
 
     return {
-        // 状态
         isConnected,
         isConnecting,
+        isMqttBrokerConnected,
+        isMqttBrokerConnecting,
         isSupported,
         lastError,
         logs,
@@ -449,22 +551,24 @@ export const useDeviceStore = defineStore('device', () => {
         adapter,
         modbusMode,
         tcpOptions,
+        mqttConfig,
         connectionType,
         gatewayOptions,
         gateways,
-        // 方法
         connect,
+        connectMqtt,
+        connectMqttBroker,
+        disconnectGateway,
+        disconnectBroker,
         disconnect,
         sendCommand,
         clearLogs,
         updateConfig,
         setModbusMode,
-        updateTcpOptions,
         setConnectionType,
         updateGatewayOptions,
-        addGateway,
-        updateGateway,
-        deleteGateway,
-        checkGatewayStatus
+        saveMqttConfig,
+        removeGateway,
+        clearOfflineGateways
     };
 });

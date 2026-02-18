@@ -1,10 +1,10 @@
 # Anyport
 
-**Anyport** 是一个基于 Web 技术的现代多协议工业调试工具。它旨在提供一个跨平台、离线可用且美观的解决方案，用于调试 Modbus、DL/T645 等工业通信协议。
+**Anyport** 是一个基于 Web 技术的现代多协议工业调试工具。它旨在提供一个跨平台、离线可用且美观的解决方案，用于调试 Modbus、DL/T645 等工业通信协议，并支持通过 ESP32 网关进行远程 Modbus 转发。
 
 ## ✨ 特性
 
-- **多协议支持**：目前支持 Modbus RTU，计划支持 DL/T645, MQTT 等。
+- **多协议支持**：目前支持 Modbus RTU，内置 Modbus TCP 解析能力，计划支持 DL/T645 等。
 - **现代化 UI**：基于 Vue 3 和全新设计语言，支持暗色模式。
 - **响应式设计**：
     - **桌面端**：专业分栏布局，大屏操作更高效。
@@ -12,23 +12,24 @@
 - **离线可用**：支持 PWA，安装后可离线运行。
 - **安全**：利用 Web Serial API 进行本地通讯，数据不上传云端。
 
-## � Modbus 调试功能
+## 🔌 Modbus 调试功能
 
 - **连接方式**
   - 本地串口：基于 Web Serial API，支持选择串口并配置波特率、数据位、停止位和校验位。
-  - 网关转发：通过 WebSocket 网关（`WebSocketGatewayTransport`）支持 Modbus RTU/TCP 远程转发，并维护网关列表与在线状态。
+  - MQTT 远程网关：通过 MQTT Broker 与 ESP32-C3 网关固件配合，支持将 Modbus RTU/TCP 请求通过 MQTT 转发到现场设备，并回传响应。
 - **协议能力**
   - Modbus RTU：完整支持 01/02/03/04/05/06/15/16 功能码，内置 CRC‑16 校验、请求帧编码与响应帧解析。
-  - Modbus TCP：内置 `ModbusTcpAdapter`，可配合网关固件通过 TCP 访问现场设备（需要部署 ESP32 网关或其他兼容网关）。
+  - Modbus TCP：内置 `ModbusTcpAdapter`，可配合 ESP32 网关固件通过以太网访问 Modbus TCP 设备。
 - **调试体验**
   - 命令构建器：在调试面板中可配置从站地址、功能码、起始地址、数量和写入值，并支持 Base‑0 / Base‑1 地址切换。
   - 报文预览：实时显示即将发送的 Modbus RTU/TCP 报文十六进制内容，便于对照现场抓包。
   - 通信日志：以时间倒序记录 TX/RX 数据，展示原始 Hex 以及解析后的寄存器 / 线圈数据和异常信息，可一键清空。
   - 结果视图：将最近一次读取结果以表格形式展示，支持十进制 / 十六进制 / 二进制多种显示格式。
   - 点表联动：支持加载设备点表（Profile），在“自动模式”下按点表自动生成读写命令并对寄存器值进行语义化展示。
+  - 网关管理：自动发现并管理 MQTT 远程网关，支持状态监控与离线清理。
   - 移动端调试：提供专门的移动端 Modbus 调试视图，针对触摸操作和竖屏布局做了优化。
 
-## �📅 未来规划 (第二期)
+## 📅 未来规划 (第二期)
 
 Anyport 的架构设计预留了完整的扩展能力，第二期开发将聚焦于**远程调试**与**云端协作**：
 
@@ -59,7 +60,7 @@ Anyport 采用分层解耦的架构设计，确保了通讯协议与传输介质
 - **Frontend**: Vue 3 (Composition API) + Vite + TypeScript
 - **State**: Pinia
 - **Database**: IndexedDB (使用 Dexie.js)
-- **Communications**: Web Serial API
+- **Communications**: Web Serial API, MQTT
 - **Styling**: Vanilla CSS (CSS Variables)
 
 ### 模块结构
@@ -70,7 +71,7 @@ anyport/
 │   ├── shared/                 # 跨项目共享的类型定义与工具
 │   └── frontend/               # Vue 3 前端应用
 │       └── src/
-│           ├── transports/     # 物理传输层：负责底层字节流收发 (WebSerial, 预留 MQTT)
+│           ├── transports/     # 物理传输层：负责底层字节流收发 (WebSerial, MQTT)
 │           ├── protocols/      # 协议编解码层：实现不同工业协议的封装与解析 (Modbus, DL/T 645)
 │           ├── services/       # 业务逻辑服务：处理配置存取、复杂数据过滤等逻辑
 │           ├── stores/         # 状态管理 (Pinia)：维护全局设备连接状态、读取的数据快照
@@ -88,6 +89,7 @@ anyport/
 
 - `packages/frontend`: 前端应用 (Vue 3 + Vite)
 - `packages/shared`: 共享类型定义和工具库
+- `esp32/AnyPortGateway`: ESP32-C3 网关固件工程，包含 MQTT 客户端、以太网/W5500 初始化以及 Modbus RTU/TCP 转发逻辑
 
 ## 🚀 本地运行与开发
 

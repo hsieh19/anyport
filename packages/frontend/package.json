@@ -1,7 +1,7 @@
 {
   "name": "@anyport/frontend",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,15 +13,18 @@
   "dependencies": {
     "@anyport/shared": "workspace:*",
     "idb": "^8.0.3",
+    "mqtt": "^5.15.0",
     "pinia": "^3.0.3",
     "vue": "^3.5.24"
   },
   "devDependencies": {
+    "@types/mqtt": "^2.5.0",
     "@types/node": "^24.10.1",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/tsconfig": "^0.8.1",
     "typescript": "~5.9.3",
     "vite": "^7.2.4",
+    "vite-plugin-node-polyfills": "^0.25.0",
     "vite-plugin-pwa": "^1.0.0",
     "vitest": "^3.0.5",
     "vue-tsc": "^3.1.4"

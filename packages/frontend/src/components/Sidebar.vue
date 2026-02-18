@@ -5,13 +5,14 @@ const emits = defineEmits<{
   (e: 'change', value: string): void
 }>();
 
+const appVersion = __APP_VERSION__;
 const activeTab = ref('modbus');
 
 const menuItems = [
   { id: 'modbus', label: 'Modbus 调试', icon: '📡' },
   { id: 'profiles', label: '点表库', icon: '📚' },
   { id: 'dlt645', label: 'DL/T 645', icon: '⚡', disabled: true },
-  { id: 'mqtt', label: 'MQTT Client', icon: '☁️', disabled: true },
+  { id: 'mqtt', label: 'Remote (MQTT)', icon: '☁️', disabled: true },
   { id: 'settings', label: '设置', icon: '⚙️', disabled: true },
 ];
 
@@ -31,7 +32,7 @@ function selectTab(id: string) {
         <span class="logo-icon">🔌</span>
         <span class="logo-text">Anyport</span>
       </div>
-      <p class="version">v1.0.3</p>
+      <p class="version">v{{ appVersion }}</p>
     </div>
     
     <nav class="sidebar-nav">

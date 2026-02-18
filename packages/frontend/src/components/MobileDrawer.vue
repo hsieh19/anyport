@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { watch } from 'vue';
 
+const appVersion = __APP_VERSION__;
 const props = defineProps<{
   activeTab: string;
 }>();
@@ -39,7 +40,7 @@ watch(() => props.activeTab, () => {
           <span class="logo-icon">🔌</span>
           <div class="logo-info">
             <span class="logo-text">Anyport</span>
-            <span class="version">v1.0.2</span>
+            <span class="version">v{{ appVersion }}</span>
           </div>
         </div>
       </div>

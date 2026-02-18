@@ -1,12 +1,24 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
+import { nodePolyfills } from 'vite-plugin-node-polyfills'
 import { resolve } from 'path'
+import { readFileSync } from 'fs'
+
+const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8'))
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
     vue(),
+    nodePolyfills({
+      include: ['buffer', 'process', 'util'],
+      globals: {
+        Buffer: true,
+        global: true,
+        process: true
+      }
+    }),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'robots.txt', 'apple-touch-icon.png'],
@@ -57,5 +69,8 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true
+  },
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version)
   }
 })
