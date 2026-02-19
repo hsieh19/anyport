@@ -1640,34 +1640,6 @@ const latestReadResults = computed(() => {
       </div> <!-- closes monitor-grid -->
     </div> <!-- closes panel-body -->
 
-    <!-- 点表选择弹窗 (简易版) -->
-    <div v-if="isProfilePickerShow" class="modal-overlay" @click.self="isProfilePickerShow = false">
-      <div class="modal-content profile-picker">
-        <div class="modal-header">
-          <h3>选择点表设备</h3>
-          <button class="btn-close" @click="isProfilePickerShow = false">×</button>
-        </div>
-        <div class="modal-body">
-          <div v-if="profileStore.profiles.length === 0" class="empty-state">
-            暂无点表库，请前往“点表管理”创建。
-          </div>
-          <div 
-            v-for="p in profileStore.profiles" 
-            :key="p.id" 
-            class="profile-item"
-            :class="{ active: selectedProfileId === p.id }"
-            @click="selectedProfileId = p.id; isProfilePickerShow = false"
-          >
-            <div class="p-icon">📦</div>
-            <div class="p-info">
-              <div class="p-title">{{ p.data.protocol_summary.manufacturer }} - {{ p.data.protocol_summary.model }}</div>
-              <div class="p-sub">{{ p.data.protocol_summary.series }} | {{ (p.data.registers || []).length }} 个节点</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- 写入二次确认弹窗 -->
     <div v-if="isWriteConfirmShow" class="modal-overlay" @click.self="isWriteConfirmShow = false">
       <div class="modal-content confirm-modal">

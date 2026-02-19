@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { watch } from 'vue';
 
 const appVersion = __APP_VERSION__;
 const props = defineProps<{
@@ -25,11 +24,6 @@ function selectTab(id: string) {
   emits('change', id);
   emits('close');
 }
-
-// 阻止滚动穿透 (预留)
-watch(() => props.activeTab, () => {
-  // 处理逻辑
-});
 </script>
 
 <template>

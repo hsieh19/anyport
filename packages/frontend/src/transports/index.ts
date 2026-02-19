@@ -3,7 +3,4 @@
  */
 
 export { WebSerialTransport } from './WebSerialTransport';
-
-// 第二期扩展
-// export { WebSocketTransport } from './WebSocketTransport';
-// export { MqttTransport } from './MqttTransport';
+export { MqttTransport } from './MqttTransport';

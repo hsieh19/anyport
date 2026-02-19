@@ -177,6 +177,13 @@ export const useDeviceStore = defineStore('device', () => {
         }, 5000);
     }
 
+    function stopGatewayHeartbeatMonitor(): void {
+        if (gatewayHeartbeatTimer !== null) {
+            window.clearInterval(gatewayHeartbeatTimer);
+            gatewayHeartbeatTimer = null;
+        }
+    }
+
     function removeGateway(id: string): void {
         gateways.value = gateways.value.filter(g => g.id !== id);
     }
@@ -289,6 +296,7 @@ export const useDeviceStore = defineStore('device', () => {
 
             await instance.connect(config);
             isMqttBrokerConnected.value = true;
+            startGatewayHeartbeatMonitor();
         } catch (error) {
             lastError.value = error instanceof Error ? error.message : String(error);
             mqttTransport.value = null;
@@ -384,6 +392,7 @@ export const useDeviceStore = defineStore('device', () => {
         }
         receiveBuffer.value = new Uint8Array(0);
         gateways.value = [];
+        stopGatewayHeartbeatMonitor();
     }
 
     async function disconnect(): Promise<void> {
@@ -404,6 +413,7 @@ export const useDeviceStore = defineStore('device', () => {
             isConnected.value = false;
             isMqttBrokerConnected.value = false;
             receiveBuffer.value = new Uint8Array(0);
+            stopGatewayHeartbeatMonitor();
         }
     }
 
@@ -537,7 +547,7 @@ export const useDeviceStore = defineStore('device', () => {
         connectionType.value = type;
     }
 
-    startGatewayHeartbeatMonitor();
+
 
     return {
         isConnected,

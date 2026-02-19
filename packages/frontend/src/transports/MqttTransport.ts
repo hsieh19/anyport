@@ -10,6 +10,7 @@ export class MqttTransport implements ITransportAdapter {
 
   private client: MqttClient | null = null;
   private _isConnected = false;
+  private connectTimeoutId: number | null = null;
 
   private dataCallback: ((data: Uint8Array) => void) | null = null;
   private errorCallback: ((error: Error) => void) | null = null;
@@ -72,17 +73,20 @@ export class MqttTransport implements ITransportAdapter {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
 
-      const timeoutId = window.setTimeout(() => {
+      this.connectTimeoutId = window.setTimeout(() => {
         if (settled) return;
         settled = true;
+        this.connectTimeoutId = null;
         const error = new Error('MQTT 连接超时，请检查 Broker 地址或网络');
         this.errorCallback?.(error);
         try {
+          client.removeAllListeners();
           client.end(true);
         } catch {
         }
         reject(error);
       }, 10000);
+      const timeoutId = this.connectTimeoutId;
 
       const settleResolve = (): void => {
         if (settled) return;
@@ -154,6 +158,12 @@ export class MqttTransport implements ITransportAdapter {
   }
 
   async disconnect(): Promise<void> {
+    // 清除可能残留的连接超时定时器
+    if (this.connectTimeoutId !== null) {
+      window.clearTimeout(this.connectTimeoutId);
+      this.connectTimeoutId = null;
+    }
+
     const client = this.client;
     this.client = null;
     this.currentConfig = null;
@@ -166,6 +176,9 @@ export class MqttTransport implements ITransportAdapter {
       }
       return;
     }
+
+    // 移除所有事件监听器，防止游离回调
+    client.removeAllListeners();
 
     await new Promise<void>(resolve => {
       client.end(true, {}, () => {
@@ -323,25 +336,26 @@ export class MqttTransport implements ITransportAdapter {
       if (isStatusTopic) {
         const siteId = segments[segments.length - 3] ?? '';
         const gatewayId = segments[segments.length - 2] ?? '';
-        if (siteId && gatewayId && this.gatewayStatusCallback) {
-          const statusValue = typeof message.status === 'string' ? message.status : '';
-          const online = statusValue === 'online';
-          // 提取网关上报的串口参数、版本、IP 信息
-          const config: { version?: string; baud?: number; parity?: string; stopBits?: number; ethIp?: string; wifiIp?: string } = {};
-          if (typeof (message as any).version === 'string') config.version = (message as any).version;
-          if (typeof (message as any).baud === 'number') config.baud = (message as any).baud;
-          if (typeof (message as any).parity === 'string') config.parity = (message as any).parity;
-          if (typeof (message as any).stopBits === 'number') config.stopBits = (message as any).stopBits;
-          if (typeof (message as any).ethIp === 'string') config.ethIp = (message as any).ethIp;
-          if (typeof (message as any).wifiIp === 'string') config.wifiIp = (message as any).wifiIp;
-          this.gatewayStatusCallback({
-            siteId,
-            gatewayId,
-            online,
-            timestamp: Date.now(),
-            config: Object.keys(config).length > 0 ? config : undefined
-          });
-        }
+        if (!siteId || !gatewayId || !this.gatewayStatusCallback) return;
+
+        const statusValue = typeof message.status === 'string' ? message.status : '';
+        const online = statusValue === 'online';
+        const raw = message as Record<string, unknown>;
+        const config: { version?: string; baud?: number; parity?: string; stopBits?: number; ethIp?: string; wifiIp?: string } = {};
+        if (typeof raw.version === 'string') config.version = raw.version;
+        if (typeof raw.baud === 'number') config.baud = raw.baud;
+        if (typeof raw.parity === 'string') config.parity = raw.parity;
+        if (typeof raw.stopBits === 'number') config.stopBits = raw.stopBits;
+        if (typeof raw.ethIp === 'string') config.ethIp = raw.ethIp;
+        if (typeof raw.wifiIp === 'string') config.wifiIp = raw.wifiIp;
+
+        this.gatewayStatusCallback({
+          siteId,
+          gatewayId,
+          online,
+          timestamp: Date.now(),
+          config: Object.keys(config).length > 0 ? config : undefined
+        });
         return;
       }
 

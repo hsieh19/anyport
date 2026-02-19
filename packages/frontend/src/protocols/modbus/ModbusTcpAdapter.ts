@@ -1,3 +1,4 @@
+import { getExceptionMessage } from './modbusErrors';
 import {
     ProtocolType,
     FrameCheckResult,
@@ -140,7 +141,7 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
                 functionCode: functionCode & 0x7F,
                 isException: true,
                 exceptionCode,
-                error: this.getExceptionMessage(exceptionCode),
+                error: getExceptionMessage(exceptionCode),
                 raw: data
             };
         }
@@ -204,20 +205,5 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
         }
 
         return FrameCheckResult.COMPLETE;
-    }
-
-    private getExceptionMessage(code: number): string {
-        const messages: Record<number, string> = {
-            0x01: '非法功能码',
-            0x02: '非法数据地址',
-            0x03: '非法数据值',
-            0x04: '从站设备故障',
-            0x05: '确认',
-            0x06: '从站设备忙',
-            0x08: '存储奇偶性差错',
-            0x0A: '不可用网关路径',
-            0x0B: '网关目标设备响应失败'
-        };
-        return messages[code] ?? `未知异常 (0x${code.toString(16).toUpperCase()})`;
     }
 }

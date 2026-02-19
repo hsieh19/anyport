@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useProfileStore } from '@/stores/profileStore';
 import type { SavedProfile } from '@/types/profile';
 
@@ -47,18 +47,25 @@ function toggleExpand(key: string) {
   }
 }
 
-// ...
 
-// 计算属性：构建三级树
+// 计算属性：构建三级树（支持搜索过滤）
 const profileTree = computed(() => {
   const tree: TreeStructure = {};
+  const kw = searchKw.value.trim().toLowerCase();
   
   profileStore.profiles.forEach(p => {
-    // 读取字段，并提供兜底默认值
     const m = p.data.protocol_summary.manufacturer || '其他厂家';
     const s = p.data.protocol_summary.series || '其他系列';
+    const model = p.data.protocol_summary.model || '';
     
-    // 初始化层级
+    // 搜索过滤：匹配厂家、系列或型号
+    if (kw && !m.toLowerCase().includes(kw) 
+           && !s.toLowerCase().includes(kw) 
+           && !model.toLowerCase().includes(kw)
+           && !(p.name || '').toLowerCase().includes(kw)) {
+      return;
+    }
+    
     if (!tree[m]) tree[m] = {};
     if (!tree[m][s]) tree[m][s] = [];
     
@@ -69,7 +76,6 @@ const profileTree = computed(() => {
 });
 
 // 监听数据变化，仅在初始化或数据加载时设置默认展开
-import { watch } from 'vue';
 watch(() => profileStore.profiles.length, (newLen, oldLen) => {
   // 只有当之前没数据，现在有数据时（即首次加载），才执行默认展开
   if (oldLen === 0 && newLen > 0 && expandedKeys.value.size === 0) {
@@ -183,7 +189,6 @@ function handleExport() {
     </div>
 
     <div class="library-body">
-      <!-- 左侧：三级目录树 -->
       <!-- 左侧：三级目录树 -->
       <div class="sidebar-tree">
         <div class="search-box">

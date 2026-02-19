@@ -3,6 +3,7 @@
  * 支持功能码 01/02/03/04/05/06/15/16
  */
 
+import { getExceptionMessage } from './modbusErrors';
 import {
     ProtocolType,
     FrameCheckResult,
@@ -207,7 +208,7 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
                 functionCode: functionCode & 0x7F,
                 isException: true,
                 exceptionCode: data[2],
-                error: this.getExceptionMessage(data[2]!),
+                error: getExceptionMessage(data[2]!),
                 raw: data
             };
         }
@@ -315,23 +316,5 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
         return verifyCRC16(buffer.slice(0, expectedLength))
             ? FrameCheckResult.COMPLETE
             : FrameCheckResult.INVALID;
-    }
-
-    /**
-     * 获取异常码描述
-     */
-    private getExceptionMessage(code: number): string {
-        const messages: Record<number, string> = {
-            0x01: '非法功能码',
-            0x02: '非法数据地址',
-            0x03: '非法数据值',
-            0x04: '从站设备故障',
-            0x05: '确认',
-            0x06: '从站设备忙',
-            0x08: '存储奇偶性差错',
-            0x0A: '不可用网关路径',
-            0x0B: '网关目标设备响应失败'
-        };
-        return messages[code] ?? `未知异常 (0x${code.toString(16).toUpperCase()})`;
     }
 }

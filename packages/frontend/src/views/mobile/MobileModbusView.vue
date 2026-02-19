@@ -6,7 +6,7 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useDeviceStore } from '@/stores/deviceStore';
 import { useProfileStore } from '@/stores/profileStore';
-import { ModbusFunctionCode } from '@/protocols/modbus';
+import { ModbusFunctionCode, calculateCRC16 } from '@/protocols/modbus';
 import { ProtocolType } from '@shared/types/protocol.types';
 import type { ModbusRtuCommand } from '@/protocols/modbus';
 
@@ -144,7 +144,7 @@ const commandHexPreview = computed(() => {
     }
     
     // Checksum (CRC16)
-    const crc = calculateCRC16(buffer);
+    const crc = calculateCRC16(new Uint8Array(buffer));
     const low = crc & 0xFF;
     const high = (crc >> 8) & 0xFF;
     
@@ -157,20 +157,6 @@ const commandHexPreview = computed(() => {
   }
 });
 
-function calculateCRC16(buffer: number[]): number {
-  let crc = 0xFFFF;
-  for (let i = 0; i < buffer.length; i++) {
-    crc ^= (buffer[i] || 0);
-    for (let j = 0; j < 8; j++) {
-      if ((crc & 1) !== 0) {
-        crc = (crc >> 1) ^ 0xA001;
-      } else {
-        crc = crc >> 1;
-      }
-    }
-  }
-  return crc;
-}
 
 
 
