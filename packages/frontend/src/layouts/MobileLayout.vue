@@ -54,11 +54,20 @@ function toggleDrawer() {
       <Transition name="page-fade" mode="out-in">
         <keep-alive>
           <div :key="currentView" class="view-container">
-            <MobileModbusView v-if="currentView === 'modbus'" />
+            <div v-if="currentView === 'modbus'" class="mobile-dev-overlay-container">
+              <MobileModbusView />
+              <div class="mobile-future-tag">
+                <div class="tag-content">
+                  <span class="icon">🚧</span>
+                  <h3>移动端视图 (Coming Soon)</h3>
+                  <p>当前专注于 PC 端体验优化</p>
+                </div>
+              </div>
+            </div>
             <ProfileLibraryView v-else-if="currentView === 'profiles'" />
             <div v-else class="placeholder-view">
               <span class="icon">🚀</span>
-              <h3>{{ pageTitle }} 开发中</h3>
+              <h3>{{ pageTitle }} 规划中</h3>
               <p>更多功能即将上线</p>
             </div>
           </div>
@@ -218,5 +227,52 @@ function toggleDrawer() {
 
 .drawer-leave-to :deep(.drawer-content) {
   transform: translateX(-100%);
+}
+.mobile-dev-overlay-container {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.mobile-future-tag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(var(--color-bg-rgb), 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 2rem;
+  text-align: center;
+}
+
+.tag-content {
+  background: var(--color-surface);
+  padding: 2rem;
+  border-radius: 1rem;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--color-border);
+}
+
+.tag-content .icon {
+  font-size: 2.5rem;
+  display: block;
+  margin-bottom: 1rem;
+}
+
+.tag-content h3 {
+  margin: 0 0 0.5rem 0;
+  color: var(--color-text);
+  font-size: 1.1rem;
+}
+
+.tag-content p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
 }
 </style>

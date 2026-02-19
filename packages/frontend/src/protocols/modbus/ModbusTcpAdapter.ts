@@ -15,7 +15,28 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
 
     private transactionId = 0;
 
+    /**
+     * 编码命令（正式发送，会自增事务 ID）
+     */
     encode(command: ModbusRtuCommand): Uint8Array {
+        // 只有正式发送时才自增 ID
+        this.transactionId = (this.transactionId + 1) & 0xFFFF;
+        return this.internalEncode(command, this.transactionId);
+    }
+
+    /**
+     * 预览报文（无副作用，显示即将使用的 ID）
+     */
+    preview(command: ModbusRtuCommand): Uint8Array {
+        // 预览下一次将要使用的 ID
+        const nextId = (this.transactionId + 1) & 0xFFFF;
+        return this.internalEncode(command, nextId);
+    }
+
+    /**
+     * 内部编码逻辑
+     */
+    private internalEncode(command: ModbusRtuCommand, tid: number): Uint8Array {
         const { functionCode, startAddress, quantity, values } = command;
 
         let pdu: Uint8Array;
@@ -97,12 +118,11 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
         }
 
         const unitId = command.slaveAddress & 0xFF;
-
-        this.transactionId = (this.transactionId + 1) & 0xFFFF;
         const adu = new Uint8Array(7 + pdu.length);
 
-        adu[0] = (this.transactionId >> 8) & 0xFF;
-        adu[1] = this.transactionId & 0xFF;
+        // 使用传入的事务 ID
+        adu[0] = (tid >> 8) & 0xFF;
+        adu[1] = tid & 0xFF;
         adu[2] = 0;
         adu[3] = 0;
 
@@ -111,7 +131,6 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
         adu[5] = length & 0xFF;
 
         adu[6] = unitId;
-
         adu.set(pdu, 7);
 
         return adu;

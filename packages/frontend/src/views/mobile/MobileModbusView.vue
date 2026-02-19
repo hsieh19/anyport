@@ -6,7 +6,7 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useDeviceStore } from '@/stores/deviceStore';
 import { useProfileStore } from '@/stores/profileStore';
-import { ModbusFunctionCode, calculateCRC16 } from '@/protocols/modbus';
+import { ModbusFunctionCode } from '@/protocols/modbus';
 import { ProtocolType } from '@shared/types/protocol.types';
 import type { ModbusRtuCommand } from '@/protocols/modbus';
 
@@ -115,43 +115,13 @@ const commandHexPreview = computed(() => {
       quantity: isRead ? quantity.value : undefined,
       values: isRead ? undefined : ([5, 6].includes(functionCode.value) ? [writeValue.value] : writeValues.value.split(',').map(Number))
     };
-    // Basic local hex generation for preview (Simplified)
-    // In a real app, this might use a shared utility to ensure exact match with backend
-    const buffer: number[] = [
-      cmd.slaveAddress,
-      cmd.functionCode,
-      (cmd.startAddress >> 8) & 0xFF,
-      cmd.startAddress & 0xFF,
-    ];
-    
-    // Read: Address + Quantity
-    if (isRead && cmd.quantity !== undefined) {
-      buffer.push((cmd.quantity >> 8) & 0xFF, cmd.quantity & 0xFF);
-    } 
-    // Single Write (05, 06): Address + Value (Direct 2 bytes)
-    else if ([5, 6].includes(functionCode.value) && cmd.values) {
-       const val = cmd.values[0] || 0;
-       // For Coil (05), FF00=ON, 0000=OFF. But here we assume user input raw or handle logic? 
-       // ModbusPanel usually sends raw input for 06, and 05 might need FF00/0000 mapping if input is 1/0.
-       // Looking at Desktop logic often it treats input as value.
-       // Let's assume writeValue is the raw 16-bit uint to send.
-       buffer.push((val >> 8) & 0xFF, val & 0xFF);
-    }
-    // Multiple Write (15, 10): Address + Quantity + Bytes + Data
-    else if ([15, 16].includes(functionCode.value) && cmd.values) {
-       // Placeholder for complex multi-write preview (0F/10)
-       // We skip full implementation here for safety
-    }
-    
-    // Checksum (CRC16)
-    const crc = calculateCRC16(new Uint8Array(buffer));
-    const low = crc & 0xFF;
-    const high = (crc >> 8) & 0xFF;
-    
-    // Modbus RTU sends Low Byte first
-    buffer.push(low, high);
+    // Use adapter for accurate preview (ensure match with actual TX)
+    const ad: any = deviceStore.adapter;
+    const frame = typeof ad.preview === 'function' ? ad.preview(cmd) : ad.encode(cmd);
 
-    return buffer.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+    return Array.from(frame as Uint8Array)
+      .map((b: number) => b.toString(16).padStart(2, '0').toUpperCase())
+      .join(' ');
   } catch (e) {
     return 'Invalid Command';
   }

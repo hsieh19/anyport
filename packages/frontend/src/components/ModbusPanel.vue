@@ -767,10 +767,13 @@ const fullRawFrame = computed(() => {
       values: getWriteValues()
     };
     
-    // 使用 adapter 编码
-    const frame = deviceStore.adapter.encode(command);
-    return Array.from(frame)
-      .map(b => b.toString(16).padStart(2, '0').toUpperCase())
+    // 使用 adapter 编码 (优先使用无副作用的预览方法)
+    const ad: any = deviceStore.adapter;
+    const frame = typeof ad.preview === 'function' 
+      ? ad.preview(command) 
+      : ad.encode(command);
+    return Array.from(frame as Uint8Array)
+      .map((b: number) => b.toString(16).padStart(2, '0').toUpperCase())
       .join(' ');
   } catch (e) {
     return '---';
@@ -785,54 +788,88 @@ const frameInterpretation = computed(() => {
 
 // 通用的报文解析函数
 function interpretFrame(hexs: string[], isRead: boolean, isRx: boolean = false) {
-  if (hexs.length < 3) return [];
+  if (hexs.length < 2) return [];
 
-  const parts = [];
-  parts.push({ name: '从站 ID', value: hexs[0] || '--' });
-  
-  const fnCode = parseInt(hexs[1] || '0', 16);
-  parts.push({ name: '功能码', value: hexs[1] || '--' });
-  
-  // 异常响应处理 (功能码最高位为 1)
-  if (isRx && fnCode > 0x80) {
-    parts.push({ name: '异常状态', value: '错误响应' });
-    if (hexs.length >= 3) {
-      parts.push({ name: '异常代码', value: hexs[2] });
+  const parts: any[] = [];
+  const mode = deviceStore.modbusMode;
+
+  if (mode === 'tcp') {
+    // --- Modbus TCP 解析 (MBAP Header 7 bytes) ---
+    if (hexs.length >= 2) parts.push({ name: '事务标识符', value: `${hexs[0]} ${hexs[1]}` });
+    if (hexs.length >= 4) parts.push({ name: '协议标识符', value: `${hexs[2]} ${hexs[3]}` });
+    if (hexs.length >= 6) parts.push({ name: '后续长度', value: `${hexs[4]} ${hexs[5]}` });
+    if (hexs.length >= 7) parts.push({ name: '单元 ID (站号)', value: hexs[6] });
+
+    // PDU 部分从第 7 字节开始
+    const pdu = hexs.slice(7);
+    if (pdu.length > 0) {
+      const fnCode = parseInt(pdu[0] || '0', 16);
+      parts.push({ name: '功能码', value: pdu[0] });
+
+      if (isRx && fnCode > 0x80) {
+        parts.push({ name: '状态', value: '异常响应' });
+        if (pdu.length >= 2) parts.push({ name: '异常代码', value: pdu[1] });
+      } else {
+        // 请求或正常响应
+        if (isRx) {
+          if ([0x01, 0x02, 0x03, 0x04].includes(fnCode)) {
+            if (pdu.length >= 2) parts.push({ name: '字节计数', value: pdu[1] });
+            if (pdu.length >= 3) parts.push({ name: '数据内容', value: pdu.slice(2).join(' ') });
+          } else {
+            if (pdu.length >= 3) parts.push({ name: '起始地址', value: `${pdu[1]} ${pdu[2]}` });
+            if (pdu.length >= 5) parts.push({ name: '数量/数值', value: `${pdu[3]} ${pdu[4]}` });
+          }
+        } else {
+          // TX
+          if (pdu.length >= 3) parts.push({ name: '起始地址', value: `${pdu[1]} ${pdu[2]}` });
+          if (pdu.length >= 5) parts.push({ name: isRead ? '寄存器数量' : '写入值', value: `${pdu[3]} ${pdu[4]}` });
+          if (!isRead && pdu.length > 5) {
+             if (pdu.length >= 6) parts.push({ name: '字节计数', value: pdu[5] });
+             if (pdu.length >= 7) parts.push({ name: '数据内容', value: pdu.slice(6).join(' ') });
+          }
+        }
+      }
     }
   } else {
-    // 正常响应或请求
-    if (isRx) {
-      // RX 响应解析
-      if ([0x01, 0x02, 0x03, 0x04].includes(fnCode)) {
-        if (hexs.length >= 3) parts.push({ name: '字节计数', value: hexs[2] });
-        if (hexs.length > 5) {
-          const dataLen = hexs.length - 3 - 2;
-          parts.push({ name: '数据内容', value: hexs.slice(3, 3 + dataLen).join(' ') });
-        }
-      } else if ([0x05, 0x06, 0x0F, 0x10].includes(fnCode)) {
-        // 05/06/0F/10 的响应通常是请求的镜像
-        if (hexs.length >= 4) parts.push({ name: '起始地址', value: `${hexs[2]} ${hexs[3]}` });
-        if (hexs.length >= 6) parts.push({ name: [0x0F, 0x10].includes(fnCode) ? '寄存器数量' : '写入值', value: `${hexs[4]} ${hexs[5]}` });
-      }
+    // --- Modbus RTU 解析 ---
+    parts.push({ name: '从站地址', value: hexs[0] || '--' });
+    
+    const fnCode = parseInt(hexs[1] || '0', 16);
+    parts.push({ name: '功能码', value: hexs[1] || '--' });
+    
+    // 异常响应处理
+    if (isRx && fnCode > 0x80) {
+      parts.push({ name: '状态', value: '异常响应' });
+      if (hexs.length >= 3) parts.push({ name: '异常代码', value: hexs[2] });
     } else {
-      // TX 请求解析 (复用之前的逻辑)
-      if (hexs.length === 8) {
-        parts.push({ name: '起始地址', value: `${hexs[2]} ${hexs[3]}` });
-        parts.push({ name: isRead ? '寄存器数量' : '写入值', value: `${hexs[4]} ${hexs[5]}` });
-      } else if (hexs.length > 8) {
-        parts.push({ name: '起始地址', value: `${hexs[2]} ${hexs[3]}` });
-        parts.push({ name: '寄存器数量', value: `${hexs[4]} ${hexs[5]}` });
-        parts.push({ name: '字节计数', value: hexs[6] });
-        const dataLen = hexs.length - 7 - 2;
-        parts.push({ name: '数据内容', value: hexs.slice(7, 7 + dataLen).join(' ') });
+      if (isRx) {
+        if ([0x01, 0x02, 0x03, 0x04].includes(fnCode)) {
+          if (hexs.length >= 3) parts.push({ name: '字节计数', value: hexs[2] });
+          const data = hexs.slice(3, hexs.length - 2);
+          if (data.length > 0) parts.push({ name: '数据内容', value: data.join(' ') });
+        } else {
+          if (hexs.length >= 4) parts.push({ name: '起始地址', value: `${hexs[2]} ${hexs[3]}` });
+          if (hexs.length >= 6) parts.push({ name: '数值', value: `${hexs[4]} ${hexs[5]}` });
+        }
+      } else {
+        // TX
+        if (hexs.length >= 6) {
+          parts.push({ name: '起始地址', value: `${hexs[2]} ${hexs[3]}` });
+          parts.push({ name: isRead ? '寄存器数量' : '写入值', value: `${hexs[4]} ${hexs[5]}` });
+        }
+        if (!isRead && hexs.length > 8) {
+          parts.push({ name: '字节计数', value: hexs[6] });
+          const data = hexs.slice(7, hexs.length - 2);
+          if (data.length > 0) parts.push({ name: '数据内容', value: data.join(' ') });
+        }
       }
     }
-  }
 
-  // 最后两位 CRC
-  if (hexs.length >= 2) {
-    const crc = hexs.slice(-2);
-    parts.push({ name: 'CRC 校验', value: `${crc[0]} ${crc[1]}` });
+    // RTU 需要显示 CRC
+    if (hexs.length >= 2) {
+      const crc = hexs.slice(-2);
+      parts.push({ name: 'CRC 校验', value: `${crc[0]} ${crc[1]}` });
+    }
   }
   
   return parts;
