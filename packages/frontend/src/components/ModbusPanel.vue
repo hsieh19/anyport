@@ -197,7 +197,14 @@ function parseAutoValue(regObj: any, allValues: any[], offset: number, defaultEn
   } else {
     // 优先使用点表定义的字节序，否则使用点表全局默认字节序
     const endian = regObj.endian || defaultEndian || 'ABCD';
-    val = getExtendedValue(allValues as number[], offset, regObj.data_type || 'uint16', endian);
+    const rawVal = getExtendedValue(allValues as number[], offset, regObj.data_type === 'bit' ? 'uint16' : (regObj.data_type || 'uint16'), endian);
+    
+    // 如果是 bit 类型且定义了 bit_offset，则提取对应位
+    if (regObj.data_type === 'bit' && regObj.bit_offset !== undefined && rawVal !== null) {
+      val = (rawVal >> (regObj.bit_offset - 1)) & 0x01;
+    } else {
+      val = rawVal;
+    }
   }
 
   if (val === null || val === undefined) return null;

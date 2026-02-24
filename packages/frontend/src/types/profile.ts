@@ -25,8 +25,10 @@ export interface RegisterDefinition {
     count?: number; // 寄存器数量
     access: 'R' | 'W' | 'RW';
     func_code?: string[]; // 支持的功能码 ["0x03", "0x06"]
-    data_type: 'int16' | 'uint16' | 'int32' | 'uint32' | 'float32' | 'string' | 'bcd' | 'coil' | 'discrete_input' | 'hex_cmd';
+    data_type: 'int16' | 'uint16' | 'int32' | 'uint32' | 'float32' | 'string' | 'bcd' | 'coil' | 'discrete_input' | 'hex_cmd' | 'bit';
     unit?: string;
+    scale?: number; // 缩放系数
+    bit_offset?: number; // 位偏移量 (从 1 开始)
     format?: string; // 格式化字符串，如 "XXXXXX.XX"
     mapping?: Record<string, string>; // 值映射，如 "1": "告警"
     endian?: 'ABCD' | 'CDAB' | 'BADC' | 'DCBA'; // 覆盖全局字节序
