@@ -59,15 +59,15 @@ function normalizeFuncCodes(input: any): number[] {
   }).filter(n => !isNaN(n));
 }
 
-function getModbusOffset(addr: number | string, fc: number | string, base1: boolean): number {
+function getModbusOffset(addr: number | string, _fc: number | string, base1: boolean): number {
   const numAddr = typeof addr === 'string' ? parseInt(addr, 10) : addr;
-  const fcNum = typeof fc === 'string' ? parseInt(fc, 10) : fc;
-  if (!base1) return numAddr;
-  if (numAddr >= 40001 && numAddr <= 49999 && (fcNum === 3 || fcNum === 6 || fcNum === 16)) return numAddr - 40001;
-  if (numAddr >= 30001 && numAddr <= 39999 && fcNum === 4) return numAddr - 30001;
-  if (numAddr >= 10001 && numAddr <= 19999 && fcNum === 2) return numAddr - 10001;
-  if (numAddr >= 1 && numAddr <= 9999 && (fcNum === 1 || fcNum === 5 || fcNum === 15)) return numAddr - 1; 
-  return numAddr;
+
+  let physical = numAddr;
+  if (numAddr >= 40000 && numAddr <= 49999) physical = numAddr % 10000;
+  else if (numAddr >= 30000 && numAddr <= 39999) physical = numAddr % 10000;
+  else if (numAddr >= 10000 && numAddr <= 19999) physical = numAddr % 10000;
+  
+  return base1 ? physical + 1 : physical;
 }
 
 function openPointSelector() {

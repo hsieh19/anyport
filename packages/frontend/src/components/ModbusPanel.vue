@@ -97,19 +97,16 @@ function encodeValue(valStr: string, dataType: string, endian: string = 'ABCD'):
   ];
 }
 
-function getModbusOffset(addr: number | string, fc: number | string, base1: boolean): number {
+function getModbusOffset(addr: number | string, _fc: number | string, base1: boolean): number {
   const numAddr = typeof addr === 'string' ? parseInt(addr, 10) : addr;
-  const fcNum = typeof fc === 'string' ? parseInt(fc, 10) : fc;
 
-  if (!base1) return numAddr; // Base 0 模式下，永远不自动减去基准值
+  let physical = numAddr;
+  if (numAddr >= 40000 && numAddr <= 49999) physical = numAddr % 10000;
+  else if (numAddr >= 30000 && numAddr <= 39999) physical = numAddr % 10000;
+  else if (numAddr >= 10000 && numAddr <= 19999) physical = numAddr % 10000;
   
-  // 仅在 Base 1 模式下，尝试将标准 PLC 范围地址识别为 1-based 偏移并转换
-  if (numAddr >= 40001 && numAddr <= 49999 && (fcNum === 3 || fcNum === 6 || fcNum === 16)) return numAddr - 40001;
-  if (numAddr >= 30001 && numAddr <= 39999 && fcNum === 4) return numAddr - 30001;
-  if (numAddr >= 10001 && numAddr <= 19999 && fcNum === 2) return numAddr - 10001;
-  if (numAddr >= 1 && numAddr <= 9999 && (fcNum === 1 || fcNum === 5 || fcNum === 15)) return numAddr - 1; 
-  
-  return numAddr;
+  // physical 就是被剥离了区间的真实地址 (0-based)，例如 40600 -> 600
+  return base1 ? physical + 1 : physical;
 }
 
 // --- 数据解析核心逻辑 ---
@@ -464,6 +461,14 @@ async function toggleConnection() {
     parity: parity.value
   });
   await deviceStore.connect();
+}
+
+function togglePing() {
+  if (deviceStore.isPinging) {
+    deviceStore.stopPing();
+  } else {
+    deviceStore.startPing();
+  }
 }
 
 // --- 写入确认逻辑 ---
@@ -1338,6 +1343,14 @@ const latestReadResults = computed(() => {
               <span v-if="deviceStore.isConnecting" class="spinner"></span>
               {{ deviceStore.isConnected ? '断开网关' : '连接网关' }}
             </button>
+            <button
+              v-if="deviceStore.isConnected && connectionType === 'mqtt' && deviceStore.gatewayOptions.protocol === 'tcp'"
+              class="btn-ping"
+              :class="{ pinging: deviceStore.isPinging }"
+              @click="togglePing"
+            >
+              {{ deviceStore.isPinging ? '⚫ Stop' : '📡 Ping' }}
+            </button>
           </div>
         </div>
       </div>
@@ -1551,8 +1564,39 @@ const latestReadResults = computed(() => {
               v-for="log in deviceStore.logs" 
               :key="log.id" 
               class="log-entry"
-              :class="log.direction"
+              :class="[log.direction, { 'ping-entry': !!log.pingResult }]"
             >
+              <!-- Ping 结果日志 -->
+              <template v-if="log.pingResult">
+                <div class="log-meta">
+                  <span class="log-time">{{ formatTime(log.timestamp) }}</span>
+                  <div class="log-tag-group">
+                    <span class="log-tag ping-tag" :class="log.pingResult.success ? 'ping-ok' : 'ping-fail'">PING</span>
+                  </div>
+                </div>
+                <div class="log-content">
+                  <div class="log-hex ping-result-text">
+                    <span class="ping-target">{{ log.pingResult.ip }}:{{ log.pingResult.port }}</span>
+                    <span v-if="log.pingResult.success" class="ping-success">
+                      — 连接成功, 延迟 {{ log.pingResult.latency }}ms
+                    </span>
+                    <span v-else class="ping-failure">
+                      — {{ 
+                        log.pingResult.error === 'host_unreachable' ? '主机不可达' : 
+                        log.pingResult.error === 'port_refused' ? '端口被拒绝' : 
+                        log.pingResult.error === 'socket_error' ? 'W5500 Socket 异常' :
+                        log.pingResult.error === 'eth_link_down' ? '以太网链路断开' :
+                        log.pingResult.error || '连接失败' 
+                      }}
+                      <template v-if="log.pingResult.latency">({{ log.pingResult.latency }}ms)</template>
+                    </span>
+                    <span class="ping-seq">(seq={{ log.pingResult.seq }})</span>
+                    <span v-if="log.pingResult.localIp" class="ping-diag">[W5500: {{ log.pingResult.localIp }}, Link: {{ log.pingResult.link }}]</span>
+                  </div>
+                </div>
+              </template>
+              <!-- Modbus 正常日志 -->
+              <template v-else>
               <div class="log-meta">
                 <span class="log-time">{{ formatTime(log.timestamp) }}</span>
                 <div class="log-tag-group">
@@ -1587,6 +1631,7 @@ const latestReadResults = computed(() => {
                   Err: {{ log.parsed.error }}
                 </div>
               </div>
+              </template>
             </div>
             
             <div v-if="deviceStore.logs.length === 0" class="log-empty">
@@ -1954,6 +1999,102 @@ const latestReadResults = computed(() => {
   background: linear-gradient(135deg, #22c55e, #16a34a);
   border: none;
   color: #ffffff;
+}
+
+.btn-ping {
+  padding: 0.4rem 1rem;
+  border-radius: 6px;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  background: rgba(14, 165, 233, 0.1);
+  color: #0ea5e9;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-ping:hover {
+  background: rgba(14, 165, 233, 0.2);
+  border-color: rgba(14, 165, 233, 0.5);
+}
+
+.btn-ping.pinging {
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  color: white;
+  border-color: transparent;
+  animation: ping-pulse 2s ease-in-out infinite;
+}
+
+@keyframes ping-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(14, 165, 233, 0); }
+}
+
+/* Ping 日志条目样式 */
+.ping-entry {
+  border-left-color: #0ea5e9 !important;
+}
+
+.ping-tag {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.ping-tag.ping-ok {
+  background: rgba(34, 197, 94, 0.15) !important;
+  color: #22c55e !important;
+}
+
+.ping-tag.ping-fail {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #ef4444 !important;
+}
+
+.ping-result-text {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.ping-target {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.ping-success {
+  color: #22c55e;
+  font-weight: 500;
+}
+
+.ping-failure {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+.ping-seq {
+  color: var(--color-text-secondary);
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+
+.ping-note {
+  color: #f59e0b;
+  font-size: 0.85em;
+  font-weight: 500;
+  margin-left: 0.25rem;
+}
+
+.ping-diag {
+  color: var(--color-text-secondary);
+  font-size: 0.75em;
+  opacity: 0.6;
+  font-family: var(--font-mono);
 }
 
 /* 主体垂直排列 */
