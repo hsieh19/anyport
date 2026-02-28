@@ -318,6 +318,8 @@ export class MqttTransport implements ITransportAdapter {
     this.gatewayStatusCallback = callback;
   }
 
+  private pingCallback: ((result: Record<string, any>) => void) | null = null;
+
   private handleMessage(topic: string, payload: Uint8Array): void {
     try {
       const text = this.payloadToString(payload);
@@ -328,6 +330,13 @@ export class MqttTransport implements ITransportAdapter {
         success?: boolean;
         error?: string;
         status?: string;
+        type?: string;
+        ip?: string;
+        port?: number;
+        latency?: number;
+        seq?: number;
+        localIp?: string;
+        link?: string;
       };
 
       const segments = topic.split('/');
@@ -364,6 +373,13 @@ export class MqttTransport implements ITransportAdapter {
         return;
       }
 
+      if (message.type === 'ping') {
+        if (this.pingCallback) {
+          this.pingCallback(message);
+        }
+        return;
+      }
+
       if (message.success === false && message.error) {
         this.errorCallback?.(new Error(message.error));
         return;
@@ -384,6 +400,47 @@ export class MqttTransport implements ITransportAdapter {
       const error = err instanceof Error ? err : new Error(String(err));
       this.errorCallback?.(error);
     }
+  }
+
+  onPingResult(callback: (result: Record<string, any>) => void): void {
+    this.pingCallback = callback;
+  }
+
+  async sendPing(ip: string, port: number, seq: number): Promise<void> {
+    if (!this.client || !this.currentConfig || !this.currentConfig.mqtt) {
+      throw new Error('MQTT 未连接或缺少配置');
+    }
+    if (!this._isConnected) {
+      throw new Error('MQTT 未连接，无法发送数据');
+    }
+
+    const { siteId, gatewayId, topicPrefix } = this.currentConfig.mqtt;
+    const sessionId = this.createSessionId();
+    this.currentSessionId = sessionId;
+
+    const prefix = topicPrefix && topicPrefix.trim().length > 0 ? topicPrefix : 'anyport';
+    const topic = `${prefix}/${siteId}/${gatewayId}/request/${sessionId}`;
+
+    const payload = {
+      sessionId,
+      transport: 'ping',
+      pingTarget: { ip, port },
+      seq
+    };
+
+    const json = JSON.stringify(payload);
+
+    await new Promise<void>((resolve, reject) => {
+      this.client!.publish(topic, json, { qos: 1 }, (err?: Error) => {
+        if (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          this.errorCallback?.(error);
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
   }
 
   private payloadToString(payload: Uint8Array): string {

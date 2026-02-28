@@ -39,6 +39,16 @@ export interface LogEntry {
     data: Uint8Array;
     hex: string;
     parsed?: ModbusRtuResponse;
+    pingResult?: {
+        success: boolean;
+        ip: string;
+        port: number;
+        latency?: number;
+        error?: string;
+        seq?: number;
+        localIp?: string;
+        link?: string;
+    };
 }
 
 type ModbusMode = 'rtu' | 'tcp';
@@ -117,6 +127,10 @@ export const useDeviceStore = defineStore('device', () => {
         }
     });
     const gateways = ref<DiscoveredGateway[]>([]);
+
+    const isPinging = ref(false);
+    let pingTimer: number | null = null;
+    let pingSeq = 1;
 
     const GATEWAY_OFFLINE_TIMEOUT_MS = 30000;
     let gatewayHeartbeatTimer: number | null = null;
@@ -337,11 +351,13 @@ export const useDeviceStore = defineStore('device', () => {
                 if (!connected && mqttTransport.value === instance) {
                     mqttTransport.value = null;
                     receiveBuffer.value = new Uint8Array(0);
+                    stopPing();
                 }
             });
             instance.onGatewayStatus(info => {
                 updateGatewayStatus(info.siteId, info.gatewayId, info.online, info.timestamp, info.config);
             });
+            instance.onPingResult(handlePingResult);
 
             const opts = mqttConfig.value;
             const config: ConnectionConfig = {
@@ -374,6 +390,7 @@ export const useDeviceStore = defineStore('device', () => {
         // 断开网关连接，但保持 Broker 连接（重新以通配符模式连接）
         isConnected.value = false;
         isMqttBrokerConnected.value = false;
+        stopPing();
         if (mqttTransport.value) {
             await mqttTransport.value.disconnect();
             mqttTransport.value = null;
@@ -386,6 +403,7 @@ export const useDeviceStore = defineStore('device', () => {
     async function disconnectBroker(): Promise<void> {
         isConnected.value = false;
         isMqttBrokerConnected.value = false;
+        stopPing();
         if (mqttTransport.value) {
             await mqttTransport.value.disconnect();
             mqttTransport.value = null;
@@ -413,6 +431,7 @@ export const useDeviceStore = defineStore('device', () => {
             isConnected.value = false;
             isMqttBrokerConnected.value = false;
             receiveBuffer.value = new Uint8Array(0);
+            stopPing();
             stopGatewayHeartbeatMonitor();
         }
     }
@@ -483,6 +502,31 @@ export const useDeviceStore = defineStore('device', () => {
         // INCOMPLETE: 继续等待更多数据
     }
 
+    function handlePingResult(result: Record<string, any>): void {
+        const entry: LogEntry = {
+            id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+            timestamp: new Date(),
+            direction: 'rx',
+            data: new Uint8Array(0),
+            hex: '',
+            pingResult: {
+                success: result.success,
+                ip: result.ip,
+                port: result.port,
+                latency: result.latency,
+                error: result.error,
+                seq: result.seq,
+                localIp: result.localIp,
+                link: result.link
+            }
+        };
+
+        logs.value.unshift(entry);
+        if (logs.value.length > 500) {
+            logs.value.pop();
+        }
+    }
+
     function handleError(error: Error): void {
         lastError.value = error.message;
         console.error('通信错误:', error);
@@ -547,7 +591,38 @@ export const useDeviceStore = defineStore('device', () => {
         connectionType.value = type;
     }
 
+    function startPing(): void {
+        if (!isConnected.value || connectionType.value !== 'mqtt' || gatewayOptions.value.protocol !== 'tcp') {
+            return;
+        }
+        if (isPinging.value) return;
+        isPinging.value = true;
+        pingSeq = 1;
+        const targetIp = gatewayOptions.value.tcpTarget.ip;
+        const targetPort = gatewayOptions.value.tcpTarget.port;
 
+        const sendOnePing = () => {
+            if (!mqttTransport.value || !isConnected.value) {
+                stopPing();
+                return;
+            }
+            mqttTransport.value.sendPing(targetIp, targetPort, pingSeq++).catch(err => {
+                console.error('Ping send error:', err);
+            });
+        };
+
+        sendOnePing();
+        pingTimer = window.setInterval(sendOnePing, 2000);
+    }
+
+    function stopPing(): void {
+        isPinging.value = false;
+        if (pingTimer !== null) {
+            window.clearInterval(pingTimer);
+            pingTimer = null;
+        }
+        pingSeq = 1;
+    }
 
     return {
         isConnected,
@@ -579,6 +654,9 @@ export const useDeviceStore = defineStore('device', () => {
         updateGatewayOptions,
         saveMqttConfig,
         removeGateway,
-        clearOfflineGateways
+        clearOfflineGateways,
+        isPinging,
+        startPing,
+        stopPing
     };
 });
