@@ -481,15 +481,31 @@ async function openBlockWriteDialog(reg: any) {
   });
   
   isBlockWriteShow.value = true;
+
+  // 1. 判断是否支持预读 (需包含 0x03 或 0x04)
+  const allowedCodes = normalizeFuncCodes(reg.func_code);
+  const canRead = allowedCodes.includes(ModbusFunctionCode.READ_HOLDING_REGISTERS) || 
+                  allowedCodes.includes(ModbusFunctionCode.READ_INPUT_REGISTERS);
+
+  if (!canRead) {
+    console.log(`[Modbus] 区块 ${reg.name} 不支持读取，跳过预读环节`);
+    isBlockLoading.value = false;
+    return;
+  }
+
   isBlockLoading.value = true;
 
   try {
     const physicalAddress = useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value;
-    // 强制发送一次读取命令
+    const readFC = allowedCodes.includes(ModbusFunctionCode.READ_INPUT_REGISTERS) 
+      ? ModbusFunctionCode.READ_INPUT_REGISTERS 
+      : ModbusFunctionCode.READ_HOLDING_REGISTERS;
+
+    // 发送读取命令
     await deviceStore.sendCommand({
       protocol: ProtocolType.MODBUS_RTU,
       slaveAddress: slaveAddress.value,
-      functionCode: ModbusFunctionCode.READ_HOLDING_REGISTERS,
+      functionCode: readFC,
       startAddress: physicalAddress,
       quantity: reg.count || 1
     });
@@ -499,6 +515,7 @@ async function openBlockWriteDialog(reg: any) {
       syncBlockValues();
     }, 800);
   } catch (e) {
+    console.error('区块预读启动失败:', e);
     showToast('区块初始值读取失败，请手动填写', 'info');
     isBlockLoading.value = false;
   }
@@ -509,28 +526,30 @@ function syncBlockValues() {
   if (!currentBlockReg.value || !isBlockWriteShow.value) return;
   const reg = currentBlockReg.value;
   
-  // 查找最近一个 RX 包含对应区块起始地址的日志
-  const lastRx = deviceStore.modbusLogs.find(log => 
-    log.direction === 'rx' && 
-    log.parsed && 
-    log.parsed.registers
-  );
+  try {
+    // 查找最近一个 RX 包含对应区块起始地址的日志
+    const lastRx = deviceStore.modbusLogs.find(log => 
+      log.direction === 'rx' && 
+      log.parsed && 
+      log.parsed.registers
+    );
 
-  if (!lastRx || !lastRx.parsed.registers) return;
-  
-  const allVals = lastRx.parsed.registers;
-  const defaultEndian = selectedProfile.value?.data.protocol_summary?.default_endian || 'ABCD';
-  
-  reg.block_fields.forEach((f: any) => {
-    const subOffset = f.offset || 0;
-    // 使用 getExtendedValue 重新解析子项
-    const rawValue = getExtendedValue(allVals, subOffset, f.data_type || 'uint16', f.endian || defaultEndian);
-    if (rawValue !== null) {
-      blockFieldValues.value[f.name] = rawValue;
-    }
-  });
-  
-  isBlockLoading.value = false;
+    if (!lastRx || !lastRx.parsed.registers) return;
+    
+    const allVals = lastRx.parsed.registers;
+    const defaultEndian = selectedProfile.value?.data.protocol_summary?.default_endian || 'ABCD';
+    
+    reg.block_fields.forEach((f: any) => {
+      const subOffset = f.offset || 0;
+      // 使用 getExtendedValue 重新解析子项
+      const rawValue = getExtendedValue(allVals, subOffset, f.data_type || 'uint16', f.endian || defaultEndian);
+      if (rawValue !== null) {
+        blockFieldValues.value[f.name] = rawValue;
+      }
+    });
+  } finally {
+    isBlockLoading.value = false;
+  }
 }
 
 // 执行区块一键写入
@@ -1852,7 +1871,11 @@ const latestReadResults = computed(() => {
                   </option>
                 </select>
                 <input v-else type="number" v-model="blockFieldValues[field.name]" />
-                <div class="field-meta">Offset: +{{ field.offset }} ({{ field.data_type }})</div>
+                <div class="field-meta">
+                  <span>Offset: +{{ field.offset }}</span>
+                  <span>DataType: {{ field.data_type }}</span>
+                  <span v-if="field.scale" class="meta-scale">Scale: {{ field.scale }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -3652,6 +3675,16 @@ const latestReadResults = computed(() => {
   opacity: 0.7;
 }
 
+.field-scale {
+  font-weight: normal;
+  font-size: 0.75rem;
+  color: var(--color-primary);
+  margin-left: 4px;
+  background: var(--color-primary-light);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
 .field-input-wrapper input,
 .field-input-wrapper select {
   width: 100%;
@@ -3666,6 +3699,14 @@ const latestReadResults = computed(() => {
   font-size: 0.75rem;
   color: var(--color-text-muted);
   margin-top: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.meta-scale {
+  color: var(--color-primary);
+  font-weight: 600;
 }
 
 .block-write-hint {
