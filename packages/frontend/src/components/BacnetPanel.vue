@@ -150,7 +150,7 @@ watch(protocolMode, () => {
 });
 
 async function toggleConnection() {
-  if (deviceStore.isConnected) {
+  if (deviceStore.isBacnetConnected) {
     try { await deviceStore.disconnect(); } catch(e) { console.error("Disconnect Error", e); }
   } else {
     if (!validateInputs()) return;
@@ -178,7 +178,7 @@ async function toggleConnection() {
 }
 
 async function registerForeignDevice() {
-  if (!deviceStore.isConnected) return;
+  if (!deviceStore.isBacnetConnected) return;
   
   try {
       await deviceStore.sendCommand({
@@ -229,7 +229,7 @@ function selectItem(item: any) {
 }
 
 async function fetchProperty(item: any, propertyId: number) {
-  if (!deviceStore.isConnected) return;
+  if (!deviceStore.isBacnetConnected) return;
   
   const invId = (invokeIdCounter % 254) + 1; // 1-254
   invokeIdCounter = invId;
@@ -270,7 +270,7 @@ async function fetchProperty(item: any, propertyId: number) {
 }
 
 async function discoverObjects(device: any) {
-  if (!deviceStore.isConnected || device.loadingObjects) return;
+  if (!deviceStore.isBacnetConnected || device.loadingObjects) return;
   
   device.loadingObjects = true;
   device.currentIndex = 0; 
@@ -337,7 +337,7 @@ function clearDevices() {
 
 // 扫描逻辑
 async function scanDevices() {
-  if (!deviceStore.isConnected || isScanning.value) return;
+  if (!deviceStore.isBacnetConnected || isScanning.value) return;
   if (!validateInputs()) return;
   
   isScanning.value = true;
@@ -496,12 +496,12 @@ watch(
     <!-- 顶部工具栏 -->
     <div class="top-toolbar">
       <div class="toolbar-group">
-        <button class="tool-btn" @click="toggleConnection" :class="{ connected: deviceStore.isConnected }">
-          <Play v-if="!deviceStore.isConnected" :size="16" />
+        <button class="tool-btn" @click="toggleConnection" :class="{ connected: deviceStore.isBacnetConnected }">
+          <Play v-if="!deviceStore.isBacnetConnected" :size="16" />
           <Square v-else :size="16" />
-          <span>{{ deviceStore.isConnected ? '断开' : '连接' }}</span>
+          <span>{{ deviceStore.isBacnetConnected ? '断开' : '连接' }}</span>
         </button>
-        <button class="tool-btn" :disabled="!deviceStore.isConnected || isScanning" @click="scanDevices">
+        <button class="tool-btn" :disabled="!deviceStore.isBacnetConnected || isScanning" @click="scanDevices">
           <Search :size="16" :class="{ spinning: isScanning }" />
           <span>{{ isScanning ? '扫描中...' : '扫描' }}</span>
         </button>

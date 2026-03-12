@@ -90,11 +90,27 @@ function selectProfile(profile: SavedProfile) {
 
 // 保存修改
 async function saveChanges() {
-  if (!selectedId.value) return;
+  // 仅在 JSON 为空且没选中 ID 时阻断（其实 JSON 校验在 store 里也有）
+  if (!jsonContent.value.trim()) return;
   
-  const success = await profileStore.saveEditorProfile(jsonContent.value, selectedId.value);
-  if (success) {
+  const savedId = await profileStore.saveEditorProfile(jsonContent.value, selectedId.value || undefined);
+  if (savedId) {
     alert('保存成功！');
+    // 如果是新建保存，更新选中的 ID
+    if (!selectedId.value) {
+      selectedId.value = savedId;
+      
+      // 自动展开新保存的厂家和系列
+      try {
+        const data = JSON.parse(jsonContent.value);
+        const m = data.protocol_summary?.manufacturer || '其他厂家';
+        const s = data.protocol_summary?.series || '其他系列';
+        expandedKeys.value.add(m);
+        expandedKeys.value.add(m + '__' + s);
+      } catch (e) {
+        // 忽略 JSON 解析错误（虽然 saveEditorProfile 已经校验过了）
+      }
+    }
   } else {
     alert(`保存失败: ${profileStore.error}`);
   }
@@ -104,15 +120,69 @@ async function saveChanges() {
 function createNew() {
   const template = {
     protocol_summary: {
-      manufacturer: "NewFactory",
-      series: "Series A",
+      manufacturer: "示例厂家",
+      series: "示例系列",
       model: "Model-X",
       protocol_type: "MODBUS_RTU",
       default_baud: 9600, 
       default_id: 1,
-      default_endian: "ABCD"
+      default_endian: "ABCD",
+      description: "这是一个包含所有常见寄存器类型的完整模板，可作为编制参考。"
     },
-    registers: []
+    registers: [
+      {
+        name: "系统状态(只读)",
+        addr: 40001,
+        access: "R",
+        data_type: "uint16",
+        mapping: {
+          "0": "初始化",
+          "1": "运行中",
+          "2": "告警",
+          "3": "故障"
+        }
+      },
+      {
+        name: "电网电压",
+        addr: 40002,
+        access: "R",
+        data_type: "uint16",
+        unit: "V",
+        scale: 0.1,
+        description: "Scale 为 0.1 表示寄存器值 2205 代表 220.5V"
+      },
+      {
+        name: "有功功率",
+        addr: 40003,
+        access: "R",
+        data_type: "float32",
+        unit: "kW",
+        endian: "CDAB",
+        description: "32位数据默认占用2个寄存器(40003-40004)"
+      },
+      {
+        name: "开关控制",
+        addr: 1,
+        access: "RW",
+        data_type: "coil",
+        description: "0/1线圈类型"
+      },
+      {
+        name: "参数设置区块",
+        addr: 40100,
+        count: 4,
+        access: "RW",
+        data_type: "block",
+        func_code: ["0x03", "0x10"],
+        block_fields: [
+          { name: "欠压阈值", offset: 0, data_type: "uint16", unit: "V", scale: 0.1 },
+          { name: "过压阈值", offset: 1, data_type: "uint16", unit: "V", scale: 0.1 },
+          { name: "恢复延时", offset: 2, data_type: "uint16", unit: "s" },
+          { name: "使能标志", offset: 3, data_type: "uint16", mapping: { "0": "禁止", "1": "使能" } }
+        ],
+        description: "区块类型支持一键读取或批量写入整个范围的寄存器"
+      }
+    ]
   };
   jsonContent.value = JSON.stringify(template, null, 2);
   updateLineCount();

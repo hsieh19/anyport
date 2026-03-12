@@ -40,15 +40,15 @@ export const useProfileStore = defineStore('profile', () => {
     }
 
     // 保存编辑器中的配置
-    async function saveEditorProfile(jsonContent: string, id?: string): Promise<boolean> {
+    async function saveEditorProfile(jsonContent: string, id?: string): Promise<string | null> {
         try {
             const data = ProfileService.parseAndValidate(jsonContent);
-            await ProfileService.save(data, id);
+            const savedId = await ProfileService.save(data, id);
             await loadProfiles();
-            return true;
+            return savedId;
         } catch (e: any) {
             error.value = e.message;
-            return false;
+            return null;
         }
     }
 
