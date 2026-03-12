@@ -5,8 +5,10 @@ export enum TransportType {
     WEB_SERIAL = 'web_serial',
     /** WebSocket - 服务器中转 (第二期) */
     WEBSOCKET = 'websocket',
-    /** MQTT - ESP32 远程采集 (第二期) */
-    MQTT = 'mqtt'
+    /** MQTT - ESP32 远程采集 */
+    MQTT = 'mqtt',
+    /** Local Bridge - 本地桥接程序 (WebSocket -> Go Bridge -> UDP) */
+    BRIDGE = 'bridge'
 }
 
 export interface ConnectionConfig {

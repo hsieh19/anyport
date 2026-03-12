@@ -30,7 +30,19 @@ export const ProfileService = {
             throw new Error('无效的配置文件格式：缺少 protocol_summary 或 registers');
         }
 
-        const id = existingId || crypto.randomUUID();
+        const generateUUID = () => {
+            if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+                return crypto.randomUUID();
+            }
+            // Fallback for non-secure contexts (HTTP)
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                const r = (Math.random() * 16) | 0;
+                const v = c === 'x' ? r : (r & 0x3) | 0x8;
+                return v.toString(16);
+            });
+        };
+
+        const id = existingId || generateUUID();
 
         // 生成显示名称：优先使用 "厂家 - 型号"，兜底使用 series 或 description
         const displayName = (data.protocol_summary.manufacturer && data.protocol_summary.model)
@@ -40,7 +52,7 @@ export const ProfileService = {
         const profile: SavedProfile = {
             id,
             name: displayName,
-            description: data.protocol_summary.device_info,
+            description: data.protocol_summary.description || data.protocol_summary.device_info,
             data,
             updatedAt: Date.now()
         };

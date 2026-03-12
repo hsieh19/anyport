@@ -8,7 +8,6 @@ import type { SavedProfile } from '@/types/profile';
 
 export const useProfileStore = defineStore('profile', () => {
     const profiles = ref<SavedProfile[]>([]);
-    const currentProfileId = ref<string | null>(null);
     const isLoading = ref(false);
     const error = ref<string | null>(null);
 
@@ -44,13 +43,8 @@ export const useProfileStore = defineStore('profile', () => {
     async function saveEditorProfile(jsonContent: string, id?: string): Promise<boolean> {
         try {
             const data = ProfileService.parseAndValidate(jsonContent);
-            const newId = await ProfileService.save(data, id);
+            await ProfileService.save(data, id);
             await loadProfiles();
-
-            // 如果是新建，选中它
-            if (!id) {
-                currentProfileId.value = newId;
-            }
             return true;
         } catch (e: any) {
             error.value = e.message;
@@ -63,27 +57,16 @@ export const useProfileStore = defineStore('profile', () => {
         if (!confirm('确定要删除这个设备配置吗？')) return;
         try {
             await ProfileService.delete(id);
-            if (currentProfileId.value === id) {
-                currentProfileId.value = null;
-            }
             await loadProfiles();
         } catch (e: any) {
             error.value = e.message;
         }
     }
 
-    // 导出
-    function exportProfile(profile: SavedProfile) {
-        const blob = new Blob([JSON.stringify(profile.data, null, 2)], { type: 'application/json' });
+    // 内部：执行浏览器文件下载
+    function downloadJson(data: unknown, filename: string) {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
-
-        // 生成文件名：厂家_系列_型号.json
-        const s = profile.data.protocol_summary;
-        const filenameParts = [s.manufacturer, s.series, s.model].filter(Boolean);
-        const filename = filenameParts.length > 0
-            ? `${filenameParts.join('_')}.json`
-            : `${profile.name.replace(/\s+/g, '_')}_profile.json`;
-
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
@@ -93,15 +76,35 @@ export const useProfileStore = defineStore('profile', () => {
         URL.revokeObjectURL(url);
     }
 
+    // 内部：根据 protocol_summary 生成文件名
+    function buildFilename(summary: any, fallbackName: string): string {
+        const parts = [summary?.manufacturer, summary?.series, summary?.model]
+            .filter((k): k is string => !!k && String(k).trim() !== '');
+        return parts.length > 0
+            ? `${parts.join('_')}.json`
+            : `${fallbackName.replace(/\s+/g, '_')}.json`;
+    }
+
+    // 导出已保存的 profile（入参为 SavedProfile 对象）
+    function exportProfile(profile: SavedProfile) {
+        downloadJson(profile.data, buildFilename(profile.data.protocol_summary, profile.name));
+    }
+
+    // 导出实时编辑数据（用于编辑器"导出"场景，data 可能和 DB 中不同）
+    function exportProfileData(data: any, fallbackId?: string | null) {
+        const fallback = fallbackId ? profiles.value.find(p => p.id === fallbackId) : null;
+        downloadJson(data, buildFilename(data?.protocol_summary, fallback?.name ?? 'DeviceProfile'));
+    }
+
     return {
         profiles,
-        currentProfileId,
         isLoading,
         error,
         loadProfiles,
         importProfile,
         saveEditorProfile,
         deleteProfile,
-        exportProfile
+        exportProfile,
+        exportProfileData
     };
 });

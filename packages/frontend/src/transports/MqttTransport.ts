@@ -4,13 +4,13 @@ import {
   type ConnectionConfig,
   type ITransportAdapter
 } from '@shared/types/transport.types';
+import { bytesToHexCompact, hexToBytes } from '@/utils/hex';
 
 export class MqttTransport implements ITransportAdapter {
   readonly type = TransportType.MQTT;
 
   private client: MqttClient | null = null;
   private _isConnected = false;
-  private connectTimeoutId: number | null = null;
 
   private dataCallback: ((data: Uint8Array) => void) | null = null;
   private errorCallback: ((error: Error) => void) | null = null;
@@ -32,6 +32,11 @@ export class MqttTransport implements ITransportAdapter {
     return this._isConnected;
   }
 
+  private get topicPrefix(): string {
+    const prefix = this.currentConfig?.mqtt?.topicPrefix;
+    return prefix && prefix.trim().length > 0 ? prefix : 'anyport';
+  }
+
   async connect(config: ConnectionConfig): Promise<void> {
     if (this._isConnected) {
       throw new Error('已经连接，请先断开');
@@ -42,128 +47,108 @@ export class MqttTransport implements ITransportAdapter {
       throw new Error('缺少 MQTT 配置');
     }
 
-    const { brokerUrl, username, password, clientId, siteId, gatewayId, topicPrefix } = mqttConfig;
+    const { brokerUrl, username, password, clientId } = mqttConfig;
 
     if (!brokerUrl) {
       throw new Error('缺少 MQTT brokerUrl');
     }
-    if (!siteId || !gatewayId) {
-      throw new Error('缺少 siteId 或 gatewayId');
-    }
 
     this.currentConfig = config;
 
-    const options: IClientOptions = {
+    const safeClientId = (typeof clientId === 'string' && clientId.trim().length > 0)
+      ? clientId.trim()
+      : this.createClientId();
+
+    console.log('[MQTT] Connecting with clientId:', safeClientId);
+
+    const options: any = {
       username,
       password,
-      clientId: clientId ?? this.createClientId(),
-      reconnectPeriod: 5000,
+      clientId: safeClientId,
       clean: true,
-      connectTimeout: 10000
+      connectTimeout: 10000,
+      keepalive: 60,
+      reconnectPeriod: 10000, // 初始阶段将重连间隔设得很长，防止干扰
     };
 
-    const client = mqtt.connect(brokerUrl, options);
+    const client = mqtt.connect(brokerUrl, options as IClientOptions);
     this.client = client;
-
-    const prefix = topicPrefix && topicPrefix.trim().length > 0 ? topicPrefix : 'anyport';
-    const responseTopicFilter = `${prefix}/${siteId}/${gatewayId}/response/+`;
-    const statusTopic = `${prefix}/${siteId}/${gatewayId}/status`;
-    const statusWildcardTopic = `${prefix}/+/+/status`;
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
 
-      this.connectTimeoutId = window.setTimeout(() => {
+      const finish = (err?: Error) => {
         if (settled) return;
         settled = true;
-        this.connectTimeoutId = null;
-        const error = new Error('MQTT 连接超时，请检查 Broker 地址或网络');
-        this.errorCallback?.(error);
-        try {
-          client.removeAllListeners();
+        window.clearTimeout(timer);
+        if (err) {
+          console.error('[MQTT] Connection attempt failed:', err.message);
           client.end(true);
-        } catch {
+          reject(err);
+        } else {
+          // 握手成功后，才将重连时间恢复正常
+          (client as any).options.reconnectPeriod = 4000;
+          resolve();
         }
-        reject(error);
-      }, 10000);
-      const timeoutId = this.connectTimeoutId;
-
-      const settleResolve = (): void => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timeoutId);
-        resolve();
       };
 
-      const settleReject = (error: Error): void => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timeoutId);
-        this.errorCallback?.(error);
-        reject(error);
-      };
+      const timer = window.setTimeout(() => finish(new Error('MQTT 连接超时')), 15000);
 
-      const handleConnect = (): void => {
+      client.once('connect', () => {
         this._isConnected = true;
         this.stateChangeCallback?.(true);
 
-        client.subscribe(
-          [responseTopicFilter, statusTopic, statusWildcardTopic],
-          {},
-          (err: Error | null) => {
-            if (err) {
-              const error = err instanceof Error ? err : new Error(String(err));
-              settleReject(error);
-              return;
-            }
+        const prefix = this.topicPrefix;
+        // 第一次连接只订阅发现网关的主题，确保握手最轻量化
+        const discoveryTopic = `${prefix}/+/+/status`;
 
-            settleResolve();
+        console.log('[MQTT] Connected. Subscribing to discovery topic:', discoveryTopic);
+        client.subscribe([discoveryTopic], (err) => {
+          if (err) {
+            console.warn('[MQTT] Discovery subscription failed:', err);
+            finish(err instanceof Error ? err : new Error('订阅失败'));
+          } else {
+            console.log('[MQTT] Ready.');
+            finish();
           }
-        );
-      };
-
-      const handleError = (err: unknown): void => {
-        const error = err instanceof Error ? err : new Error(String(err));
-        settleReject(error);
-      };
-
-      const handleOfflineOrEnd = (): void => {
-        if (!this._isConnected && !settled) {
-          const error = new Error('MQTT 连接失败，请检查 Broker 地址或网络');
-          settleReject(error);
-          return;
-        }
-
-        if (this._isConnected) {
-          this._isConnected = false;
-          this.stateChangeCallback?.(false);
-        }
-      };
-
-      client.on('connect', handleConnect);
-      client.on('reconnect', () => {
-        if (this._isConnected) {
-          this._isConnected = false;
-          this.stateChangeCallback?.(false);
-        }
+        });
       });
-      client.on('offline', handleOfflineOrEnd);
-      client.on('end', handleOfflineOrEnd);
-      client.on('close', handleOfflineOrEnd);
-      client.on('error', handleError);
+
+      client.once('error', (err) => {
+        finish(err instanceof Error ? err : new Error(String(err)));
+      });
+
       client.on('message', (topic: string, payload: Buffer) => {
         this.handleMessage(topic, new Uint8Array(payload));
       });
     });
+
+    // 绑定后续维护连接用的事件
+    client.on('offline', () => {
+      if (this._isConnected) {
+        this._isConnected = false;
+        this.stateChangeCallback?.(false);
+      }
+    });
+
+    client.on('connect', () => {
+      if (!this._isConnected) {
+        this._isConnected = true;
+        this.stateChangeCallback?.(true);
+      }
+    });
+
+    client.on('error', (err) => {
+      if (this._isConnected) {
+        this.errorCallback?.(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
   }
 
+  private createClientId(): string {
+    return `anyport-web-${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+  }
   async disconnect(): Promise<void> {
-    // 清除可能残留的连接超时定时器
-    if (this.connectTimeoutId !== null) {
-      window.clearTimeout(this.connectTimeoutId);
-      this.connectTimeoutId = null;
-    }
-
     const client = this.client;
     this.client = null;
     this.currentConfig = null;
@@ -191,6 +176,47 @@ export class MqttTransport implements ITransportAdapter {
       this.stateChangeCallback?.(false);
     }
   }
+  private prevGatewayTopics: string[] = [];
+
+  async selectGateway(siteId: string, gatewayId: string): Promise<void> {
+    if (this.currentConfig && this.currentConfig.mqtt) {
+      this.currentConfig.mqtt.siteId = siteId;
+      this.currentConfig.mqtt.gatewayId = gatewayId;
+
+      const prefix = this.topicPrefix;
+      const responseTopic = `${prefix}/${siteId}/${gatewayId}/response/+`;
+      const statusTopic = `${prefix}/${siteId}/${gatewayId}/status`;
+      const nextTopics = [responseTopic, statusTopic];
+
+      if (this.client && this._isConnected) {
+        // 退订旧的主题
+        if (this.prevGatewayTopics.length > 0) {
+          console.log('[MQTT] Unsubscribing previous gateway topics:', this.prevGatewayTopics);
+          this.client.unsubscribe(this.prevGatewayTopics);
+        }
+        // 订阅新的主题
+        console.log('[MQTT] Subscribing to new gateway topics:', nextTopics);
+        this.client.subscribe(nextTopics);
+        this.prevGatewayTopics = nextTopics;
+      }
+    }
+  }
+
+  async startDiscovery(): Promise<void> {
+    if (!this.client || !this._isConnected || !this.currentConfig || !this.currentConfig.mqtt) return;
+
+    const { siteId, gatewayId } = this.currentConfig.mqtt;
+    const prefix = this.topicPrefix;
+
+    // MQTT 规范严禁在 PUBLISH 主题中使用通配符（+ 或 #）
+    // 如果没有具体的 ID，我们应该发布到公共发现主题，或者仅靠订阅 status 等待上报
+    const topic = (siteId && gatewayId)
+      ? `${prefix}/${siteId}/${gatewayId}/discovery/request`
+      : `${prefix}/discovery/request`;
+
+    console.log('[MQTT] Requesting discovery on topic:', topic);
+    this.client.publish(topic, JSON.stringify({ action: 'discovery' }), { qos: 0 });
+  }
 
   async send(data: Uint8Array): Promise<void> {
     if (!this.client || !this.currentConfig || !this.currentConfig.mqtt) {
@@ -200,11 +226,11 @@ export class MqttTransport implements ITransportAdapter {
       throw new Error('MQTT 未连接，无法发送数据');
     }
 
-    const { siteId, gatewayId, topicPrefix } = this.currentConfig.mqtt;
+    const { siteId, gatewayId } = this.currentConfig.mqtt;
     const sessionId = this.createSessionId();
     this.currentSessionId = sessionId;
 
-    const prefix = topicPrefix && topicPrefix.trim().length > 0 ? topicPrefix : 'anyport';
+    const prefix = this.topicPrefix;
     const topic = `${prefix}/${siteId}/${gatewayId}/request/${sessionId}`;
 
     const payload = {
@@ -247,34 +273,35 @@ export class MqttTransport implements ITransportAdapter {
       throw new Error('MQTT 未连接，无法发送数据');
     }
 
-    const { siteId, gatewayId, topicPrefix } = this.currentConfig.mqtt;
+    const { siteId, gatewayId } = this.currentConfig.mqtt;
     const sessionId = this.createSessionId();
     this.currentSessionId = sessionId;
 
-    const prefix = topicPrefix && topicPrefix.trim().length > 0 ? topicPrefix : 'anyport';
+    const prefix = this.topicPrefix;
     const topic = `${prefix}/${siteId}/${gatewayId}/request/${sessionId}`;
 
-    const hex = this.bytesToHex(data);
+    const hex = bytesToHexCompact(data);
 
+    // 确保使用纯对象并转换类型，避免 Vue Proxy 导致的问题
     const payload =
       target.protocol === 'tcp'
         ? {
           sessionId,
-          transport: target.protocol,
+          transport: 'tcp',
           tcpTarget: {
-            ip: target.tcpTarget.ip,
-            port: target.tcpTarget.port
+            ip: String(target.tcpTarget.ip),
+            port: Number(target.tcpTarget.port)
           },
           payloadHex: hex
         }
         : {
           sessionId,
-          transport: target.protocol,
+          transport: 'rtu',
           rtuTarget: {
-            baudRate: target.rtuTarget.baudRate,
-            dataBits: target.rtuTarget.dataBits,
-            stopBits: target.rtuTarget.stopBits,
-            parity: target.rtuTarget.parity
+            baudRate: Number(target.rtuTarget.baudRate),
+            dataBits: Number(target.rtuTarget.dataBits || 8),
+            stopBits: Number(target.rtuTarget.stopBits),
+            parity: String(target.rtuTarget.parity)
           },
           payloadHex: hex
         };
@@ -322,6 +349,10 @@ export class MqttTransport implements ITransportAdapter {
 
   private handleMessage(topic: string, payload: Uint8Array): void {
     try {
+      if (!this._isConnected) {
+        this._isConnected = true;
+        this.stateChangeCallback?.(true);
+      }
       const text = this.payloadToString(payload);
       const message = JSON.parse(text) as {
         sessionId?: string;
@@ -390,7 +421,7 @@ export class MqttTransport implements ITransportAdapter {
       if (Array.isArray(message.data)) {
         buffer = new Uint8Array(message.data);
       } else if (typeof message.payloadHex === 'string') {
-        buffer = this.hexToBytes(message.payloadHex);
+        buffer = hexToBytes(message.payloadHex);
       }
 
       if (buffer && this.dataCallback) {
@@ -414,11 +445,11 @@ export class MqttTransport implements ITransportAdapter {
       throw new Error('MQTT 未连接，无法发送数据');
     }
 
-    const { siteId, gatewayId, topicPrefix } = this.currentConfig.mqtt;
+    const { siteId, gatewayId } = this.currentConfig.mqtt;
     const sessionId = this.createSessionId();
     this.currentSessionId = sessionId;
 
-    const prefix = topicPrefix && topicPrefix.trim().length > 0 ? topicPrefix : 'anyport';
+    const prefix = this.topicPrefix;
     const topic = `${prefix}/${siteId}/${gatewayId}/request/${sessionId}`;
 
     const payload = {
@@ -454,26 +485,7 @@ export class MqttTransport implements ITransportAdapter {
     return result;
   }
 
-  private hexToBytes(hex: string): Uint8Array {
-    const normalized = hex.replace(/[^0-9a-fA-F]/g, '');
-    const length = Math.floor(normalized.length / 2);
-    const bytes = new Uint8Array(length);
-    for (let i = 0; i < length; i++) {
-      const byte = normalized.slice(i * 2, i * 2 + 2);
-      bytes[i] = Number.parseInt(byte, 16);
-    }
-    return bytes;
-  }
 
-  private bytesToHex(data: Uint8Array): string {
-    return Array.from(data)
-      .map(b => b.toString(16).padStart(2, '0').toUpperCase())
-      .join('');
-  }
-
-  private createClientId(): string {
-    return `anyport-web-${Math.random().toString(16).slice(2)}`;
-  }
 
   private createSessionId(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -482,4 +494,5 @@ export class MqttTransport implements ITransportAdapter {
     return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
   }
 }
+
 

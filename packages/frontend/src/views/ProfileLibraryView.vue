@@ -8,7 +8,6 @@ const profileStore = useProfileStore();
 const searchKw = ref('');
 const selectedId = ref<string | null>(null);
 const jsonContent = ref('');
-const isEditing = ref(false);
 
 // 编辑器相关
 const lineCount = ref(1);
@@ -39,7 +38,6 @@ const expandedKeys = ref<Set<string>>(new Set());
 
 // 切换折叠状态
 function toggleExpand(key: string) {
-  console.log('Toggle:', key, expandedKeys.value.has(key));
   if (expandedKeys.value.has(key)) {
     expandedKeys.value.delete(key);
   } else {
@@ -88,7 +86,6 @@ function selectProfile(profile: SavedProfile) {
   selectedId.value = profile.id;
   jsonContent.value = JSON.stringify(profile.data, null, 2);
   updateLineCount();
-  isEditing.value = false;
 }
 
 // 保存修改
@@ -98,7 +95,6 @@ async function saveChanges() {
   const success = await profileStore.saveEditorProfile(jsonContent.value, selectedId.value);
   if (success) {
     alert('保存成功！');
-    isEditing.value = false;
   } else {
     alert(`保存失败: ${profileStore.error}`);
   }
@@ -121,7 +117,6 @@ function createNew() {
   jsonContent.value = JSON.stringify(template, null, 2);
   updateLineCount();
   selectedId.value = null; // null 表示这是一个新文件
-  isEditing.value = true;
 }
 
 // 导入文件处理
@@ -139,35 +134,8 @@ function handleExport() {
   if (!selectedId.value) return;
   
   try {
-    // 1. 获取最新数据
     const data = JSON.parse(jsonContent.value);
-    
-    // 2. 生成文件名
-    const s = data.protocol_summary || {};
-    // 过滤掉 undefined/null/空字符串
-    const parts = [s.manufacturer, s.series, s.model].filter(k => k && String(k).trim() !== '');
-    
-    let filename = 'profile.json';
-    if (parts.length > 0) {
-        filename = `${parts.join('_')}.json`;
-    } else {
-        // 兜底：尝试使用旧版字段或 store 中的名称
-        const p = profileStore.profiles.find(p => p.id === selectedId.value);
-        const name = p?.name || 'DeviceProfile';
-        filename = `${name.replace(/\s+/g, '_')}.json`;
-    }
-
-    // 3. 执行下载
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
+    profileStore.exportProfileData(data, selectedId.value);
   } catch (e) {
     alert('导出失败：当前的 JSON 格式不正确，无法解析。');
     console.error(e);

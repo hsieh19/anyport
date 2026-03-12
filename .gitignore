@@ -130,3 +130,6 @@ google_antigravity/
 
 # Temporary files
 tmp/
+
+# Binaries
+*.exe

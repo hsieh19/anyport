@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue';
 import Sidebar from '@/components/Sidebar.vue';
 import ModbusPanel from '@/components/ModbusPanel.vue';
+import BacnetPanel from '@/components/BacnetPanel.vue';
 import ProfileLibraryView from '@/views/ProfileLibraryView.vue';
 
 const currentView = ref('modbus');
@@ -13,6 +14,7 @@ function handleTabChange(id: string) {
 const pageTitle = computed(() => {
   switch (currentView.value) {
     case 'modbus': return 'Modbus 调试';
+    case 'bacnet': return 'BACnet 调试';
     case 'profiles': return '点表库管理';
     default: return '控制台';
   }
@@ -37,6 +39,7 @@ const pageTitle = computed(() => {
         <Transition name="fade" mode="out-in">
           <keep-alive>
             <ModbusPanel v-if="currentView === 'modbus'" />
+            <BacnetPanel v-else-if="currentView === 'bacnet'" />
             <ProfileLibraryView v-else-if="currentView === 'profiles'" />
             <div v-else class="placeholder-view">
               <h3>功能开发中...</h3>

@@ -16,7 +16,9 @@ export enum ProtocolType {
     /** RS232/RS485 Hex 透传 (第二期) */
     HEX_RAW = 'hex_raw',
     /** BACnet MS/TP (第二期) */
-    BACNET_MSTP = 'bacnet_mstp'
+    BACNET_MSTP = 'bacnet_mstp',
+    /** BACnet/IP (第二期) */
+    BACNET_IP = 'bacnet_ip'
 }
 
 /**

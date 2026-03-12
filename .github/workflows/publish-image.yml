@@ -67,10 +67,22 @@ jobs:
           # Extract changelog and append
           sed -n "/## \[$VERSION_NUM\]/,/## \[/p" CHANGELOG.md | sed '$d' >> release_body.txt
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Build Bridge Binary
+        run: |
+          cd tools/anyport-bridge
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o anyport-bridge.exe main.go
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: release_body.txt
+          files: tools/anyport-bridge/anyport-bridge.exe
           draft: false
           prerelease: false
         env:

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onActivated } from 'vue';
 import { useDeviceStore, type ConnectionType } from '@/stores/deviceStore';
 import { useProfileStore } from '@/stores/profileStore'; 
-import { ModbusFunctionCode } from '@/protocols/modbus';
+import { ModbusFunctionCode, MODBUS_FUNCTION_CODE_OPTIONS, normalizeFuncCodes, getModbusOffset, encodeValue, parseAutoValue } from '@/protocols/modbus';
 import type { ModbusRtuCommand } from '@/protocols/modbus';
+import { bytesToHexSpaced } from '@/utils/hex';
 import { ProtocolType } from '@shared/types/protocol.types';
 import MqttConfigDialog from './MqttConfigDialog.vue';
 import GatewayManagerDialog from './GatewayManagerDialog.vue';
@@ -22,211 +23,19 @@ async function toggleBrokerConnection() {
   }
 }
 
-// 初始化加载点表
+// 初始化加载点表并设置协议
 onMounted(() => {
   if (profileStore.profiles.length === 0) {
     profileStore.loadProfiles();
   }
+  // 切换到 Modbus 调试时，恢复之前保存的 modbusMode 及相关状态
+  deviceStore.setModbusMode(deviceStore.modbusMode);
 });
 
-// 辅助函数：将多种格式的 func_code 转换为数字数组
-function normalizeFuncCodes(input: any): number[] {
-  if (!input) return [];
-  const arr = Array.isArray(input) ? input : [input];
-  return arr.map(item => {
-    if (item === null || item === undefined) return NaN;
-    if (typeof item === 'string') {
-      // 处理 "0x03" 或 "3" 格式
-      return item.startsWith('0x') ? parseInt(item, 16) : parseInt(item, 10);
-    }
-    return Number(item);
-  }).filter(n => !isNaN(n));
-}
+onActivated(() => {
+  deviceStore.setModbusMode(deviceStore.modbusMode);
+});
 
-/**
- * 辅助函数：Modbus 地址归一化
- * 将 PLC 地址 (如 40600) 转换为协议偏移量 (如 599 或 40600)
- * 逻辑：
- * 1. 如果是 Base 0 (base1 = false)，则视为原始偏移量不做任何处理。
- * 2. 如果是 Base 1 (base1 = true)，则尝试根据功能码判定是否属于 PLC 地址段并减去基准。
- */
-// --- 写入值转换逻辑 ---
-
-/**
- * 将输入值根据类型转换成 Modbus 寄存器数组 (16位)
- */
-function encodeValue(valStr: string, dataType: string, endian: string = 'ABCD'): number[] {
-  const val = parseFloat(valStr);
-  if (isNaN(val)) return [];
-
-  // 判断是否是 32 位类型 (需占用 2 个寄存器)
-  const is32Bit = ['float32', 'int32', 'uint32'].includes(dataType);
-  
-  if (!is32Bit) {
-    // 对于布尔类型，Modbus 协议通常 0x0000 为 OFF，0xFF00 为 ON
-    if (dataType === 'coil' || dataType === 'discrete_input') {
-      return [val === 0 ? 0x0000 : 0xFF00];
-    }
-    return [Math.round(val) & 0xFFFF];
-  }
-
-  // 处理 32 位编码
-  const buffer = new ArrayBuffer(4);
-  const view = new DataView(buffer);
-
-  if (dataType === 'float32') {
-    view.setFloat32(0, val, false); // 原生大端
-  } else if (dataType === 'int32') {
-    view.setInt32(0, Math.round(val), false);
-  } else { // uint32
-    view.setUint32(0, Math.round(val), false);
-  }
-
-  const bytes = new Uint8Array(buffer);
-  let reordered: number[] = [];
-  
-  // 字节序处理
-  if (endian === 'CDAB') reordered = [bytes[2]!, bytes[3]!, bytes[0]!, bytes[1]!];
-  else if (endian === 'BADC') reordered = [bytes[1]!, bytes[0]!, bytes[3]!, bytes[2]!];
-  else if (endian === 'DCBA') reordered = [bytes[3]!, bytes[2]!, bytes[1]!, bytes[0]!];
-  else reordered = [bytes[0]!, bytes[1]!, bytes[2]!, bytes[3]!]; // ABCD
-
-  return [
-    ((reordered[0] ?? 0) << 8) | (reordered[1] ?? 0),
-    ((reordered[2] ?? 0) << 8) | (reordered[3] ?? 0)
-  ];
-}
-
-function getModbusOffset(addr: number | string, _fc: number | string, base1: boolean): number {
-  const numAddr = typeof addr === 'string' ? parseInt(addr, 10) : addr;
-
-  let physical = numAddr;
-  if (numAddr >= 40000 && numAddr <= 49999) physical = numAddr % 10000;
-  else if (numAddr >= 30000 && numAddr <= 39999) physical = numAddr % 10000;
-  else if (numAddr >= 10000 && numAddr <= 19999) physical = numAddr % 10000;
-  
-  // physical 就是被剥离了区间的真实地址 (0-based)，例如 40600 -> 600
-  return base1 ? physical + 1 : physical;
-}
-
-// --- 数据解析核心逻辑 ---
-
-/**
- * 辅助：跨寄存器解析 (支持 16/32 位，及各种字节序)
- * byteOrder: 'ABCD' (默认大端), 'CDAB' (小端交换), 'BADC', 'DCBA'
- */
-function getExtendedValue(allValues: number[], offset: number, dataType: string, byteOrder: string = 'ABCD'): number | null {
-  const val1 = allValues[offset]; // 原始第1个寄存器 (16bit)
-  if (val1 === undefined) return null;
-
-  // 32位数据解析 (需要读取两个寄存器)
-  if (dataType === 'int32' || dataType === 'uint32' || dataType === 'float32') {
-    const val2 = allValues[offset + 1]; // 原始第2个寄存器 (16bit)
-    if (val2 === undefined) return null;
-
-    const buffer = new ArrayBuffer(4);
-    const view = new DataView(buffer);
-    
-    // 将两个 16bit 寄存器拼成 4 个字节，根据 byteOrder 排布
-    //ABCD: val1_H, val1_L, val2_H, val2_L
-    //CDAB: val2_H, val2_L, val1_H, val1_L
-    //BADC: val1_L, val1_H, val2_L, val2_H
-    //DCBA: val2_L, val2_H, val1_L, val1_H
-    
-    const h1 = (val1 >> 8) & 0xFF;
-    const l1 = val1 & 0xFF;
-    const h2 = (val2 >> 8) & 0xFF;
-    const l2 = val2 & 0xFF;
-
-    let bytes = [h1, l1, h2, l2]; // ABCD
-    if (byteOrder === 'CDAB') bytes = [h2, l2, h1, l1];
-    else if (byteOrder === 'BADC') bytes = [l1, h1, l2, h2];
-    else if (byteOrder === 'DCBA') bytes = [l2, h2, l1, h1];
-
-    bytes.forEach((b, i) => view.setUint8(i, b));
-
-    if (dataType === 'float32') return view.getFloat32(0, false);
-    if (dataType === 'int32') return view.getInt32(0, false);
-    return view.getUint32(0, false);
-  }
-
-  // 16位数据解析
-  const buffer = new ArrayBuffer(2);
-  const view = new DataView(buffer);
-  
-  // 16位也可能有字节交换 (BADC/DCBA 下通常意味着 16bit 内部字节交换)
-  if (byteOrder === 'BADC' || byteOrder === 'DCBA') {
-    view.setUint8(0, val1 & 0xFF);
-    view.setUint8(1, (val1 >> 8) & 0xFF);
-  } else {
-    view.setUint16(0, val1, false);
-  }
-
-  if (dataType === 'int16') return view.getInt16(0, false);
-  return view.getUint16(0, false);
-}
-
-// 核心解析函数
-function parseAutoValue(regObj: any, allValues: any[], offset: number, defaultEndian: string = 'ABCD'): string | null {
-  if (!regObj) return null;
-
-  // 区分处理：线圈、字符串、或普通数值
-  let val: any;
-  const isCoil = regObj.data_type === 'coil' || regObj.data_type === 'discrete_input';
-  const isString = regObj.data_type === 'string';
-  
-  if (isCoil) {
-    const rawVal = allValues[offset];
-    val = (typeof rawVal === 'boolean') ? (rawVal ? 1 : 0) : rawVal;
-  } else if (isString) {
-    // --- 字符串特殊处理 ---
-    const count = regObj.count || 1;
-    let bytes: number[] = [];
-    for (let i = 0; i < count; i++) {
-       const regVal = allValues[offset + i];
-       if (regVal === undefined) break;
-       // Modbus 习惯：高字节在前，低字节在后
-       bytes.push((regVal >> 8) & 0xFF);
-       bytes.push(regVal & 0xFF);
-    }
-    // 转为字符串并去除末尾的空字符 (\0)
-    val = String.fromCharCode(...bytes).replace(/\u0000/g, '').trim();
-  } else {
-    // 优先使用点表定义的字节序，否则使用点表全局默认字节序
-    const endian = regObj.endian || defaultEndian || 'ABCD';
-    const rawVal = getExtendedValue(allValues as number[], offset, regObj.data_type === 'bit' ? 'uint16' : (regObj.data_type || 'uint16'), endian);
-    
-    // 如果是 bit 类型且定义了 bit_offset，则提取对应位
-    if (regObj.data_type === 'bit' && regObj.bit_offset !== undefined && rawVal !== null) {
-      val = (rawVal >> (regObj.bit_offset - 1)) & 0x01;
-    } else {
-      val = rawVal;
-    }
-  }
-
-  if (val === null || val === undefined) return null;
-
-  // 1. Mapping 映射
-  if (regObj.mapping) {
-    const strKey = val.toString();
-    if (regObj.mapping[strKey] !== undefined) return regObj.mapping[strKey];
-    
-    const hexKey = '0x' + Number(val).toString(16).toUpperCase();
-    const hexKeyLower = '0x' + Number(val).toString(16).toLowerCase();
-    if (regObj.mapping[hexKey] !== undefined) return regObj.mapping[hexKey];
-    if (regObj.mapping[hexKeyLower] !== undefined) return regObj.mapping[hexKeyLower];
-  }
-
-  // 2. Scale 缩放 (仅对非线圈和非字符串类型)
-  if (!isCoil && !isString && regObj.scale !== undefined) {
-    val = (Number(val) * regObj.scale).toFixed(3);
-    val = parseFloat(val); // 消除多余 0
-  }
-
-  // 3. Unit 单位
-  const unitStr = regObj.unit ? ` ${regObj.unit}` : '';
-  return `${val}${unitStr}`;
-}
 
 // 运行模式
 type RunMode = 'manual' | 'auto';
@@ -254,12 +63,8 @@ const quantity = ref(1);
 const writeValue = ref(0);
 const writeValues = ref('');
 
-// (已移除原处的 watch(selectedRegisterName)，移动到下方以确保 useBase1 已定义)
 
-const baudRate = ref(9600);
-const dataBits = ref(8);
-const stopBits = ref(1);
-const parity = ref<'none' | 'even' | 'odd'>('none');
+
 
 const showMqttDialog = ref(false);
 const showGatewayManager = ref(false);
@@ -385,22 +190,10 @@ const modbusCommandTitle = computed(() =>
   deviceStore.modbusMode === 'rtu' ? 'Modbus RTU 命令' : 'Modbus TCP 命令'
 );
 
-// 原始功能码选项定义
-const ALL_FUNCTION_CODES = [
-  { value: ModbusFunctionCode.READ_COILS, label: '01 - 读线圈' },
-  { value: ModbusFunctionCode.READ_DISCRETE_INPUTS, label: '02 - 读离散输入' },
-  { value: ModbusFunctionCode.READ_HOLDING_REGISTERS, label: '03 - 读保持寄存器' },
-  { value: ModbusFunctionCode.READ_INPUT_REGISTERS, label: '04 - 读输入寄存器' },
-  { value: ModbusFunctionCode.WRITE_SINGLE_COIL, label: '05 - 写单个线圈' },
-  { value: ModbusFunctionCode.WRITE_SINGLE_REGISTER, label: '06 - 写单个寄存器' },
-  { value: ModbusFunctionCode.WRITE_MULTIPLE_COILS, label: '0F - 写多个线圈' },
-  { value: ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS, label: '10 - 写多个寄存器' },
-];
-
 // 根据运行模式和选中的寄存器，动态过滤可用的功能码
 const availableFunctionCodeOptions = computed(() => {
   if (runMode.value === 'manual') {
-    return ALL_FUNCTION_CODES;
+    return MODBUS_FUNCTION_CODE_OPTIONS;
   }
   
   // 自动模式下：未选择点表或未选择寄存器，则没有可选功能码
@@ -409,7 +202,7 @@ const availableFunctionCodeOptions = computed(() => {
   }
   
   const allowed = normalizeFuncCodes(currentRegisterObj.value.func_code);
-  return ALL_FUNCTION_CODES.filter(opt => allowed.includes(opt.value));
+  return MODBUS_FUNCTION_CODE_OPTIONS.filter(opt => allowed.includes(opt.value));
 });
 
 // 波特率选项
@@ -434,7 +227,7 @@ const isSingleWrite = computed(() => {
 });
 
 async function toggleConnection() {
-  if (deviceStore.isConnected) {
+  if (deviceStore.isModbusConnected) {
     if (connectionType.value === 'mqtt') {
       // MQTT 模式：断开网关连接，保持 Broker 连接以继续发现网关
       await deviceStore.disconnectGateway();
@@ -454,12 +247,7 @@ async function toggleConnection() {
     return;
   }
 
-  deviceStore.updateConfig({
-    baudRate: baudRate.value,
-    dataBits: dataBits.value as 5 | 6 | 7 | 8,
-    stopBits: stopBits.value as 1 | 2,
-    parity: parity.value
-  });
+
   await deviceStore.connect();
 }
 
@@ -505,8 +293,8 @@ const lastSentContext = ref<{
 } | null>(null);
 
 // 监听日志，捕获响应结果
-watch(() => deviceStore.logs.length, () => {
-  const latestLog = deviceStore.logs[0];
+watch(() => deviceStore.modbusLogs.length, () => {
+  const latestLog = deviceStore.modbusLogs[0];
   if (!latestLog || latestLog.direction !== 'rx' || !lastSentContext.value) return;
 
   // 检查是否是针对最后一次发送的响应 (时间在 2s 内)
@@ -551,11 +339,12 @@ async function executeActualWrite() {
     if (unlockTargetReg) {
       console.log(`[Modbus] 正在自动解锁: ${unlockCfg.target}`);
       const unlockRawVal = typeof unlockCfg.value === 'string' && unlockCfg.value.startsWith('0x') ? parseInt(unlockCfg.value, 16) : Number(unlockCfg.value);
+      const unlockPhysicalAddr = getModbusOffset(String(unlockTargetReg.addr || 0), String(ModbusFunctionCode.WRITE_SINGLE_REGISTER));
       await deviceStore.sendCommand({
         protocol: ProtocolType.MODBUS_RTU,
         slaveAddress: slaveAddress.value,
         functionCode: ModbusFunctionCode.WRITE_SINGLE_REGISTER,
-        startAddress: getModbusOffset(String(unlockTargetReg.addr || 0), String(ModbusFunctionCode.WRITE_SINGLE_REGISTER), useBase1.value),
+        startAddress: unlockPhysicalAddr,
         values: [unlockRawVal]
       });
       let delayMs = 200;
@@ -574,7 +363,7 @@ async function executeActualWrite() {
   // 记录上下文
   lastSentContext.value = {
     fc: functionCode.value,
-    addr: startAddress.value,
+    addr: physicalAddress, 
     time: Date.now()
   };
 
@@ -600,11 +389,12 @@ async function sendCommand() {
   const isRead = isReadOperation.value;
   const reg = currentRegisterObj.value;
 
+  const physicalAddress = useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value;
+
   if (isRead) {
-    const physicalAddress = useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value;
     lastSentContext.value = {
       fc: functionCode.value,
-      addr: startAddress.value,
+      addr: physicalAddress,
       time: Date.now()
     };
     await deviceStore.sendCommand({
@@ -637,7 +427,7 @@ async function sendCommand() {
       protocol: ProtocolType.MODBUS_RTU,
       slaveAddress: slaveAddress.value,
       functionCode: readFC,
-      startAddress: useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value,
+      startAddress: physicalAddress,
       quantity: (reg && ['float32', 'int32', 'uint32'].includes(reg.data_type)) ? 2 : (reg?.count || 1)
     });
     setTimeout(() => {
@@ -708,10 +498,7 @@ watch([startAddress, useBase1], ([newAddr, isBase1]) => {
 
 // 计算 PLC 地址 (Modicon 寻址)
 const plcAddress = computed(() => {
-  // 物理地址逻辑：
-  // Base 0 模式下：物理地址 = 输入值。PLC地址 = 物理地址 + 1 (即 输入值 + 1)
-  // Base 1 模式下：物理地址 = 输入值 - 1。PLC地址 = 物理地址 + 1 (即 输入值)
-  const addr = useBase1.value ? Math.max(1, startAddress.value) : startAddress.value + 1;
+  const addr = startAddress.value;
   
   switch (functionCode.value) {
     case ModbusFunctionCode.READ_COILS:
@@ -739,14 +526,13 @@ function updateAutoAddress() {
     const reg = currentRegisterObj.value;
     const allowedCodes = normalizeFuncCodes(reg.func_code);
     
-    // 智能默认：自动切换到该寄存器支持的第一个功能码
-    if (allowedCodes.length > 0) {
+    if (allowedCodes.length > 0 && !allowedCodes.includes(functionCode.value)) {
       functionCode.value = allowedCodes[0] as ModbusFunctionCode;
     }
     
     const firstCode = allowedCodes[0] ?? functionCode.value;
-    // 强制根据目前的 useBase1 状态重新计算
-    startAddress.value = getModbusOffset((reg.addr !== undefined ? reg.addr : 0), firstCode, useBase1.value);
+    const logicalOffset = getModbusOffset((reg.addr !== undefined ? reg.addr : 0), firstCode);
+    startAddress.value = logicalOffset;
     quantity.value = reg.count || 1;
   }
 }
@@ -784,9 +570,7 @@ const fullRawFrame = computed(() => {
     const frame = typeof ad.preview === 'function' 
       ? ad.preview(command) 
       : ad.encode(command);
-    return Array.from(frame as Uint8Array)
-      .map((b: number) => b.toString(16).padStart(2, '0').toUpperCase())
-      .join(' ');
+    return bytesToHexSpaced(frame as Uint8Array);
   } catch (e) {
     return '---';
   }
@@ -890,8 +674,11 @@ function interpretFrame(hexs: string[], isRead: boolean, isRx: boolean = false) 
 // 辅助：判断是否是读取操作 (针对日志解析)
 function isReadTx(hex: string): boolean {
   const parts = hex.split(' ');
-  if (parts.length < 2) return true;
-  const fn = parseInt(parts[1] || '0', 16);
+  const mode = deviceStore.modbusMode;
+  // TCP 模式下功能码在第7个字节 (索引7)，RTU 模式下在第1个字节 (索引1)
+  const fcIndex = mode === 'tcp' ? 7 : 1;
+  if (parts.length <= fcIndex) return true;
+  const fn = parseInt(parts[fcIndex] || '0', 16);
   return [0x01, 0x02, 0x03, 0x04].includes(fn);
 }
 
@@ -917,7 +704,7 @@ function formatBin(val: number): string {
 // 计算属性：提取最近一次成功读取的寄存器结果
 const latestReadResults = computed(() => {
   // 查找最近一条包含寄存器数据且不是错误的 RX 日志
-  const lastRxIndex = deviceStore.logs.findIndex(log => 
+  const lastRxIndex = deviceStore.modbusLogs.findIndex(log => 
     log.direction === 'rx' && 
     log.parsed && 
     !log.parsed.error &&
@@ -925,15 +712,15 @@ const latestReadResults = computed(() => {
   );
 
   if (lastRxIndex === -1) return [];
-  const lastReadLog = deviceStore.logs[lastRxIndex];
+  const lastReadLog = deviceStore.modbusLogs[lastRxIndex];
   if (!lastReadLog || !lastReadLog.parsed) return [];
 
   // 获取请求时的起始地址与数量：从该 RX *之后* (即时间更早) 的最近一条 TX 中解析
   let physicalStartAddr = 0;
   let requestedQuantity = 0;
 
-  for (let i = lastRxIndex + 1; i < deviceStore.logs.length; i++) {
-    const log = deviceStore.logs[i];
+  for (let i = lastRxIndex + 1; i < deviceStore.modbusLogs.length; i++) {
+    const log = deviceStore.modbusLogs[i];
     if (log && log.direction === 'tx') {
        const hexs = log.hex.split(' ');
        // Modbus RTU 请求长度通常为 8 字节
@@ -973,20 +760,36 @@ const latestReadResults = computed(() => {
         const currentFC = parsed.functionCode || parsed.fc || 0;
         
         // 查找是否是新数据点起点
-        matchedReg = profileData.registers.find((r: any) => getModbusOffset(r.addr, currentFC, useBase1.value) === currentPhysicalAddr);
+        matchedReg = profileData.registers.find((r: any) => {
+          const logicOffsetFromProfile = getModbusOffset(r.addr || 0, currentFC);
+          const expectedPhysicalAddr = useBase1.value ? Math.max(0, logicOffsetFromProfile - 1) : logicOffsetFromProfile;
+          const isMatchAddr = expectedPhysicalAddr === currentPhysicalAddr;
+          const isMatchFC = normalizeFuncCodes(r.func_code).includes(currentFC);
+          
+          // 如果是位聚合模式，只要地址匹配且功能码匹配即可作为起点 (即使它可能覆盖多个位)
+          if (r.data_type === 'bits') {
+             return isMatchAddr && isMatchFC;
+          }
+          
+          return isMatchAddr && isMatchFC;
+        });
         
         // 检查是否是跟随位
         const parentReg = profileData.registers.find((r: any) => {
-          const normAddr = getModbusOffset(r.addr, currentFC, useBase1.value);
-          return currentPhysicalAddr > normAddr && currentPhysicalAddr < (normAddr + (r.count || 1));
+          const logicOffsetFromProfile = getModbusOffset(r.addr || 0, currentFC);
+          const expectedPhysicalAddr = useBase1.value ? Math.max(0, logicOffsetFromProfile - 1) : logicOffsetFromProfile;
+          const isMatchFC = normalizeFuncCodes(r.func_code).includes(currentFC);
+          return isMatchFC && currentPhysicalAddr > expectedPhysicalAddr && currentPhysicalAddr < (expectedPhysicalAddr + (r.count || 1));
         });
 
         if (matchedReg) {
           const parsedValue = parseAutoValue(matchedReg, allVals, index, defaultEndian);
+          const logicOffset = getModbusOffset(matchedReg.addr || 0, currentFC);
+          const expectedPhysicalAddr = useBase1.value ? Math.max(0, logicOffset - 1) : logicOffset;
           pendingSummary = {
             type: 'summary',
             text: `${matchedReg.name} == ${parsedValue}`,
-            triggerAddr: (matchedReg.addr !== undefined ? getModbusOffset(matchedReg.addr, currentFC, useBase1.value) : currentPhysicalAddr) + (matchedReg.count || 1) - 1
+            triggerAddr: expectedPhysicalAddr + (matchedReg.count || 1) - 1
           };
         } else if (parentReg) {
           isFollower = true;
@@ -1035,20 +838,30 @@ const latestReadResults = computed(() => {
         const currentFC = parsed.functionCode || parsed.fc || 0;
         
         // 查找匹配
-        matchedReg = profileData.registers.find((r: any) => getModbusOffset(r.addr || 0, currentFC, useBase1.value) === currentPhysicalAddr);
+        matchedReg = profileData.registers.find((r: any) => {
+          const logicOffsetFromProfile = getModbusOffset(r.addr || 0, currentFC);
+          const expectedPhysicalAddr = useBase1.value ? Math.max(0, logicOffsetFromProfile - 1) : logicOffsetFromProfile;
+          const isMatchAddr = expectedPhysicalAddr === currentPhysicalAddr;
+          const isMatchFC = normalizeFuncCodes(r.func_code).includes(currentFC);
+          return isMatchAddr && isMatchFC;
+        });
         
         // 线圈通常 count 为 1，如果不为 1 处理跟随逻辑
         const parentReg = profileData.registers.find((r: any) => {
-          const normAddr = getModbusOffset(r.addr || 0, currentFC, useBase1.value);
-          return currentPhysicalAddr > normAddr && currentPhysicalAddr < (normAddr + (r.count || 1));
+          const logicOffsetFromProfile = getModbusOffset(r.addr || 0, currentFC);
+          const expectedPhysicalAddr = useBase1.value ? Math.max(0, logicOffsetFromProfile - 1) : logicOffsetFromProfile;
+          const isMatchFC = normalizeFuncCodes(r.func_code).includes(currentFC);
+          return isMatchFC && currentPhysicalAddr > expectedPhysicalAddr && currentPhysicalAddr < (expectedPhysicalAddr + (r.count || 1));
         });
 
         if (matchedReg) {
           const parsedValue = parseAutoValue(matchedReg, allCoils, index);
+          const logicOffset = getModbusOffset(matchedReg.addr || 0, currentFC);
+          const expectedPhysicalAddr = useBase1.value ? Math.max(0, logicOffset - 1) : logicOffset;
           pendingSummary = {
             type: 'summary',
             text: `${matchedReg.name} == ${parsedValue}`,
-            triggerAddr: (matchedReg.addr !== undefined ? getModbusOffset(matchedReg.addr, currentFC, useBase1.value) : currentPhysicalAddr) + (matchedReg.count || 1) - 1
+            triggerAddr: expectedPhysicalAddr + (matchedReg.count || 1) - 1
           };
         } else if (parentReg) {
           isFollower = true;
@@ -1112,9 +925,14 @@ const latestReadResults = computed(() => {
           <!-- 状态摘要（移动到此处） -->
           <div v-if="connectionType === 'mqtt'" class="header-status-summary">
             <div class="status-row">
-              <span class="status-dot" :class="deviceStore.isMqttBrokerConnected ? 'dot-on' : 'dot-off'"></span>
+              <span
+                class="status-dot"
+                :class="deviceStore.isMqttBrokerConnected ? 'dot-on' : 'dot-off'"
+              ></span>
               <span class="status-label">Broker</span>
-              <span>: {{ deviceStore.isMqttBrokerConnected ? '已连接' : '未连接' }}</span>
+              <span>
+                : {{ deviceStore.isMqttBrokerConnected ? '已连接' : '未连接' }}
+              </span>
             </div>
             <div class="status-row cursor-help" :title="currentGateway?.online ? gatewayTooltip : ''">
               <span class="status-dot" :class="currentGateway?.online ? 'dot-on' : 'dot-off'"></span>
@@ -1160,7 +978,7 @@ const latestReadResults = computed(() => {
               <div class="gateway-select-wrap">
                 <select
                   v-model="selectedGatewayId"
-                  :disabled="deviceStore.isConnected || deviceStore.gateways.length === 0"
+                  :disabled="deviceStore.isModbusConnected || deviceStore.gateways.length === 0"
                   class="gateway-select"
                 >
                   <option value="" disabled v-if="deviceStore.gateways.length === 0">
@@ -1195,7 +1013,7 @@ const latestReadResults = computed(() => {
                 <input
                   type="text"
                   class="gateway-id-input"
-                  :disabled="deviceStore.isConnected"
+                  :disabled="deviceStore.isModbusConnected"
                   :value="deviceStore.mqttConfig.siteId"
                   placeholder="Site ID"
                   @input="(e) => {
@@ -1207,7 +1025,7 @@ const latestReadResults = computed(() => {
                 <input
                   type="text"
                   class="gateway-id-input"
-                  :disabled="deviceStore.isConnected"
+                  :disabled="deviceStore.isModbusConnected"
                   :value="deviceStore.mqttConfig.gatewayId"
                   placeholder="Gateway ID"
                   @input="(e) => {
@@ -1219,24 +1037,24 @@ const latestReadResults = computed(() => {
               <div class="flex items-center gap-2 shrink-0">
                 <div class="base-switch">
                   <button
-                    :class="{ active: deviceStore.gatewayOptions.protocol === 'tcp' }"
-                    :disabled="deviceStore.isConnected"
-                    @click="
-                      deviceStore.updateGatewayOptions({ protocol: 'tcp' });
-                      deviceStore.setModbusMode('tcp');
-                    "
-                  >
-                    TCP
-                  </button>
-                  <button
                     :class="{ active: deviceStore.gatewayOptions.protocol === 'rtu' }"
-                    :disabled="deviceStore.isConnected"
+                    :disabled="deviceStore.isModbusConnected"
                     @click="
                       deviceStore.updateGatewayOptions({ protocol: 'rtu' });
                       deviceStore.setModbusMode('rtu');
                     "
                   >
                     RTU
+                  </button>
+                  <button
+                    :class="{ active: deviceStore.gatewayOptions.protocol === 'tcp' }"
+                    :disabled="deviceStore.isModbusConnected"
+                    @click="
+                      deviceStore.updateGatewayOptions({ protocol: 'tcp' });
+                      deviceStore.setModbusMode('tcp');
+                    "
+                  >
+                    TCP
                   </button>
                 </div>
               </div>
@@ -1246,7 +1064,7 @@ const latestReadResults = computed(() => {
                   <input
                     type="text"
                     v-model="tcpEndpoint"
-                    :disabled="deviceStore.isConnected"
+                    :disabled="deviceStore.isModbusConnected"
                     placeholder="IP:Port"
                     class="flex-1"
                   />
@@ -1255,7 +1073,7 @@ const latestReadResults = computed(() => {
                 <template v-else>
                   <select
                     v-model.number="deviceStore.gatewayOptions.rtuTarget.baudRate"
-                    :disabled="deviceStore.isConnected"
+                    :disabled="deviceStore.isModbusConnected"
                     class="w-28"
                   >
                     <option v-for="rate in baudRateOptions" :key="rate" :value="rate">
@@ -1265,7 +1083,7 @@ const latestReadResults = computed(() => {
 
                   <select
                     v-model="deviceStore.gatewayOptions.rtuTarget.dataBits"
-                    :disabled="deviceStore.isConnected"
+                    :disabled="deviceStore.isModbusConnected"
                     class="w-20"
                   >
                     <option :value="7">7 数据位</option>
@@ -1274,7 +1092,7 @@ const latestReadResults = computed(() => {
 
                   <select
                     v-model="deviceStore.gatewayOptions.rtuTarget.stopBits"
-                    :disabled="deviceStore.isConnected"
+                    :disabled="deviceStore.isModbusConnected"
                     class="w-24"
                   >
                     <option :value="1">1 停止位</option>
@@ -1283,7 +1101,7 @@ const latestReadResults = computed(() => {
 
                   <select
                     v-model="deviceStore.gatewayOptions.rtuTarget.parity"
-                    :disabled="deviceStore.isConnected"
+                    :disabled="deviceStore.isModbusConnected"
                     class="w-24"
                   >
                     <option value="none">无校验</option>
@@ -1295,23 +1113,23 @@ const latestReadResults = computed(() => {
             </div>
 
             <div class="config-group" v-else>
-              <select v-model="baudRate" :disabled="deviceStore.isConnected">
+              <select v-model="deviceStore.serialConfig.baudRate" :disabled="deviceStore.isModbusConnected">
                 <option v-for="rate in baudRateOptions" :key="rate" :value="rate">
                   {{ rate }} bps
                 </option>
               </select>
 
-              <select v-model="dataBits" :disabled="deviceStore.isConnected">
+              <select v-model="deviceStore.serialConfig.dataBits" :disabled="deviceStore.isModbusConnected">
                 <option :value="7">7 数据位</option>
                 <option :value="8">8 数据位</option>
               </select>
 
-              <select v-model="stopBits" :disabled="deviceStore.isConnected">
+              <select v-model="deviceStore.serialConfig.stopBits" :disabled="deviceStore.isModbusConnected">
                 <option :value="1">1 停止位</option>
                 <option :value="2">2 停止位</option>
               </select>
 
-              <select v-model="parity" :disabled="deviceStore.isConnected">
+              <select v-model="deviceStore.serialConfig.parity" :disabled="deviceStore.isModbusConnected">
                 <option value="none">无校验</option>
                 <option value="even">偶校验</option>
                 <option value="odd">奇校验</option>
@@ -1323,10 +1141,9 @@ const latestReadResults = computed(() => {
               <button
                 class="btn-broker"
                 :class="{ connected: deviceStore.isMqttBrokerConnected }"
-                :disabled="deviceStore.isMqttBrokerConnecting || deviceStore.isConnected"
+                :disabled="deviceStore.isMqttBrokerConnecting || deviceStore.isModbusConnected"
                 @click="toggleBrokerConnection"
               >
-                <span v-if="deviceStore.isMqttBrokerConnecting" class="spinner"></span>
                 {{ deviceStore.isMqttBrokerConnected ? '断开 Broker' : '连接 Broker' }}
               </button>
             </div>
@@ -1335,16 +1152,16 @@ const latestReadResults = computed(() => {
               :class="[
                 'btn-connect',
                 { 'min-w-[96px] md:min-w-[110px]': connectionType === 'mqtt' },
-                { connected: deviceStore.isConnected, connecting: deviceStore.isConnecting }
+                { connected: deviceStore.isModbusConnected, connecting: deviceStore.isModbusConnecting }
               ]"
-              :disabled="deviceStore.isConnecting || (!deviceStore.isSupported && connectionType === 'serial') || (connectionType === 'mqtt' && !deviceStore.isMqttBrokerConnected && !deviceStore.isConnected)"
+              :disabled="deviceStore.isModbusConnecting || (!deviceStore.isSupported && connectionType === 'serial') || (connectionType === 'mqtt' && !deviceStore.isMqttBrokerConnected && !deviceStore.isModbusConnected)"
               @click="toggleConnection"
             >
-              <span v-if="deviceStore.isConnecting" class="spinner"></span>
-              {{ deviceStore.isConnected ? '断开网关' : '连接网关' }}
+              <span v-if="deviceStore.isModbusConnecting" class="spinner"></span>
+              {{ deviceStore.isModbusConnected ? '断开网关' : '连接网关' }}
             </button>
             <button
-              v-if="deviceStore.isConnected && connectionType === 'mqtt' && deviceStore.gatewayOptions.protocol === 'tcp'"
+              v-if="deviceStore.isModbusConnected && connectionType === 'mqtt' && deviceStore.gatewayOptions.protocol === 'tcp'"
               class="btn-ping"
               :class="{ pinging: deviceStore.isPinging }"
               @click="togglePing"
@@ -1361,8 +1178,9 @@ const latestReadResults = computed(() => {
       <div v-else-if="connectionType === 'serial' && !deviceStore.isSupported" class="warning-banner">
         ⚠️ 当前浏览器不支持 Web Serial API，请使用 Chrome 89+ 或 Edge 89+
       </div>
-      <div v-if="deviceStore.lastError" class="error-banner">
-        ❌ {{ deviceStore.lastError }}
+      <div v-if="deviceStore.modbusError" class="error-banner">
+        ❌ {{ deviceStore.modbusError }}
+        <button class="close-btn" @click="deviceStore.modbusError = null" style="background:none;border:none;color:inherit;cursor:pointer;float:right;">×</button>
       </div>
     </section>
 
@@ -1537,7 +1355,7 @@ const latestReadResults = computed(() => {
 
               <button 
                 class="btn-send"
-                :disabled="!deviceStore.isConnected"
+                :disabled="!deviceStore.isModbusConnected"
                 @click="sendCommand"
               >
                 发送命令
@@ -1561,7 +1379,7 @@ const latestReadResults = computed(() => {
           
           <div class="log-container">
             <div 
-              v-for="log in deviceStore.logs" 
+              v-for="log in deviceStore.modbusLogs" 
               :key="log.id" 
               class="log-entry"
               :class="[log.direction, { 'ping-entry': !!log.pingResult }]"
@@ -1625,7 +1443,7 @@ const latestReadResults = computed(() => {
                   Reg: [{{ log.parsed.registers.join(', ') }}]
                 </div>
                 <div v-if="log.parsed?.coils" class="log-parsed">
-                  Coil: [{{ log.parsed.coils.map(c => c ? '1' : '0').join('') }}]
+                  Coil: [{{ log.parsed.coils.map((c: boolean) => c ? '1' : '0').join('') }}]
                 </div>
                 <div v-if="log.parsed?.error" class="log-error">
                   Err: {{ log.parsed.error }}
@@ -1634,7 +1452,7 @@ const latestReadResults = computed(() => {
               </template>
             </div>
             
-            <div v-if="deviceStore.logs.length === 0" class="log-empty">
+            <div v-if="deviceStore.modbusLogs.length === 0" class="log-empty">
               暂无通信记录
             </div>
           </div>
@@ -3066,9 +2884,10 @@ const latestReadResults = computed(() => {
 
 .summary-content {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* 改为顶端对齐，适合多行 */
   gap: 8px;
   justify-content: center;
+  padding: 4px 0;
 }
 
 .summary-icon {
@@ -3080,6 +2899,9 @@ const latestReadResults = computed(() => {
   color: var(--color-primary);
   font-size: 0.95rem;
   letter-spacing: 0.5px;
+  white-space: pre-wrap; /* 支持换行 */
+  line-height: 1.6; /* 增加行高 */
+  text-align: left; /* 多行时建议左对齐或保持居中，这里由于 content 是 center，text-align 可选 */
 }
 .modal-header.warning {
   background: rgba(245, 166, 35, 0.1);
