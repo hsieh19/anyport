@@ -29,17 +29,16 @@ export function getModbusOffset(addr: number | string, _fc: number | string): nu
   const numAddr = typeof addr === 'string' ? parseInt(addr, 10) : addr;
 
   let offset = numAddr;
-  // 剥离区间前缀 (40000+, 30000+, 10000+)
+  // 仅剥离区间前缀，不进行任何硬编码的减法（如 -1）
   if (numAddr >= 40000 && numAddr <= 49999) {
-    offset = numAddr % 10000;
+    offset = numAddr - 40000;
   } else if (numAddr >= 30000 && numAddr <= 39999) {
-    offset = numAddr % 10000;
+    offset = numAddr - 30000;
   } else if (numAddr >= 10000 && numAddr <= 19999) {
-    offset = numAddr % 10000;
+    offset = numAddr - 10000;
   }
   
-  // 返回剥离后的逻辑偏移量 (如 40001 -> 1, 0 -> 0)
-  // 物理地址的转换 (Base 1 下减 1) 由 UI 或具体调用方处理
+  // 40001 -> 1, 40025 -> 25
   return offset;
 }
 
@@ -185,6 +184,24 @@ export function parseAutoValue(regObj: any, allValues: any[], offset: number, de
       groupedResults.push(results.slice(i, i + 2).join(' '));
     }
     
+    return groupedResults.join('\n');
+  } else if (regObj.data_type === 'block' && regObj.block_fields) {
+    // block 类型聚合解析逻辑 (按区块内部定义的子字段进行解析)
+    const results: string[] = [];
+    regObj.block_fields.forEach((field: any) => {
+      // 构造虚拟子寄存器定义
+      const subOffset = field.offset || 0;
+      const subRes = parseAutoValue(field, allValues, offset + subOffset, defaultEndian);
+      if (subRes !== null) {
+        results.push(`[${field.name}: ${subRes}]`);
+      }
+    });
+
+    // 同样按每 2 个字段一组进行分行显示，优化 UI 展示空间
+    const groupedResults: string[] = [];
+    for (let i = 0; i < results.length; i += 2) {
+      groupedResults.push(results.slice(i, i + 2).join(' '));
+    }
     return groupedResults.join('\n');
   } else {
     const endian = regObj.endian || defaultEndian || 'ABCD';

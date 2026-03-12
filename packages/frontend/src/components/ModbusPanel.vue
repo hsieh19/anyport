@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onActivated } from 'vue';
 import { useDeviceStore, type ConnectionType } from '@/stores/deviceStore';
 import { useProfileStore } from '@/stores/profileStore'; 
-import { ModbusFunctionCode, MODBUS_FUNCTION_CODE_OPTIONS, normalizeFuncCodes, getModbusOffset, encodeValue, parseAutoValue } from '@/protocols/modbus';
+import { ModbusFunctionCode, MODBUS_FUNCTION_CODE_OPTIONS, normalizeFuncCodes, getModbusOffset, encodeValue, parseAutoValue, getExtendedValue } from '@/protocols/modbus';
 import type { ModbusRtuCommand } from '@/protocols/modbus';
 import { bytesToHexSpaced } from '@/utils/hex';
 import { ProtocolType } from '@shared/types/protocol.types';
@@ -62,6 +62,26 @@ const startAddress = ref(0);
 const quantity = ref(1);
 const writeValue = ref(0);
 const writeValues = ref('');
+
+// 手动模式：数据类型
+const manualDataType = ref('uint16');
+const manualDataTypeOptions = [
+  { label: 'uint16 (16位无符号)', value: 'uint16' },
+  { label: 'int16 (16位有符号)', value: 'int16' },
+  { label: 'uint32 (32位无符号)', value: 'uint32' },
+  { label: 'int32 (32位有符号)', value: 'int32' },
+  { label: 'float32 (32位浮点)', value: 'float32' },
+  { label: 'String (字符串)', value: 'string' },
+  { label: 'Coil/Bit (线圈/位)', value: 'coil' }
+];
+
+const manualEndian = ref('ABCD');
+const endianOptions = [
+  { label: 'ABCD (大端)', value: 'ABCD' },
+  { label: 'CDAB (字交换)', value: 'CDAB' },
+  { label: 'BADC (字节交换)', value: 'BADC' },
+  { label: 'DCBA (小端)', value: 'DCBA' }
+];
 
 
 
@@ -265,9 +285,15 @@ const pendingWriteInfo = ref({
   regName: '',
   address: 0,
   newValue: '',
-  oldValue: '等待读取...',
-  type: 'data'
+  oldValue: '读取中...',
+  type: ''
 });
+
+// 区块写入弹窗状态 (Block Write)
+const isBlockWriteShow = ref(false);
+const isBlockLoading = ref(false);
+const currentBlockReg = ref<any>(null);
+const blockFieldValues = ref<Record<string, any>>({});
 
 // --- 通信反馈反馈 (Toast) ---
 const toast = ref({
@@ -391,6 +417,12 @@ async function sendCommand() {
 
   const physicalAddress = useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value;
 
+  // 优先处理区块写入逻辑 (仅在非读取操作时触发)
+  if (!isRead && runMode.value === 'auto' && (reg?.data_type as string) === 'block') {
+    openBlockWriteDialog(reg);
+    return;
+  }
+
   if (isRead) {
     lastSentContext.value = {
       fc: functionCode.value,
@@ -439,6 +471,115 @@ async function sendCommand() {
   }
 }
 
+// 打开区块写入对话框
+async function openBlockWriteDialog(reg: any) {
+  currentBlockReg.value = reg;
+  // 初始化字段值（清空上一次）
+  blockFieldValues.value = {};
+  reg.block_fields.forEach((f: any) => {
+    blockFieldValues.value[f.name] = undefined;
+  });
+  
+  isBlockWriteShow.value = true;
+  isBlockLoading.value = true;
+
+  try {
+    const physicalAddress = useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value;
+    // 强制发送一次读取命令
+    await deviceStore.sendCommand({
+      protocol: ProtocolType.MODBUS_RTU,
+      slaveAddress: slaveAddress.value,
+      functionCode: ModbusFunctionCode.READ_HOLDING_REGISTERS,
+      startAddress: physicalAddress,
+      quantity: reg.count || 1
+    });
+    
+    // 延迟一会尝试从解析结果中提取初值
+    setTimeout(() => {
+      syncBlockValues();
+    }, 800);
+  } catch (e) {
+    showToast('区块初始值读取失败，请手动填写', 'info');
+    isBlockLoading.value = false;
+  }
+}
+
+// 从最近读取日志同步到区块表单
+function syncBlockValues() {
+  if (!currentBlockReg.value || !isBlockWriteShow.value) return;
+  const reg = currentBlockReg.value;
+  
+  // 查找最近一个 RX 包含对应区块起始地址的日志
+  const lastRx = deviceStore.modbusLogs.find(log => 
+    log.direction === 'rx' && 
+    log.parsed && 
+    log.parsed.registers
+  );
+
+  if (!lastRx || !lastRx.parsed.registers) return;
+  
+  const allVals = lastRx.parsed.registers;
+  const defaultEndian = selectedProfile.value?.data.protocol_summary?.default_endian || 'ABCD';
+  
+  reg.block_fields.forEach((f: any) => {
+    const subOffset = f.offset || 0;
+    // 使用 getExtendedValue 重新解析子项
+    const rawValue = getExtendedValue(allVals, subOffset, f.data_type || 'uint16', f.endian || defaultEndian);
+    if (rawValue !== null) {
+      blockFieldValues.value[f.name] = rawValue;
+    }
+  });
+  
+  isBlockLoading.value = false;
+}
+
+// 执行区块一键写入
+async function executeBlockWrite() {
+  if (!currentBlockReg.value) return;
+  const reg = currentBlockReg.value;
+  const count = reg.count || 1;
+  const payload = new Array(count).fill(0);
+  const defaultEndian = selectedProfile.value?.data.protocol_summary?.default_endian || 'ABCD';
+
+  try {
+    // 对每个字段进行编码并填入 Payload 数组
+    reg.block_fields.forEach((f: any) => {
+      const userVal = blockFieldValues.value[f.name];
+      if (userVal === undefined || userVal === null) return;
+      
+      const encoded = encodeValue(String(userVal), f.data_type || 'uint16', f.endian || defaultEndian);
+      const subOffset = f.offset || 0;
+      encoded.forEach((word, wordIndex) => {
+        if (subOffset + wordIndex < count) {
+          payload[subOffset + wordIndex] = word;
+        }
+      });
+    });
+
+    const physicalAddress = useBase1.value ? Math.max(0, startAddress.value - 1) : startAddress.value;
+    
+    // 记录上下文
+    lastSentContext.value = {
+      fc: ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS,
+      addr: physicalAddress, 
+      time: Date.now()
+    };
+
+    await deviceStore.sendCommand({
+      protocol: ProtocolType.MODBUS_RTU,
+      slaveAddress: slaveAddress.value,
+      functionCode: ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS,
+      startAddress: physicalAddress,
+      quantity: count,
+      values: payload
+    });
+
+    isBlockWriteShow.value = false;
+  } catch (e) {
+    showToast('区块写入下发失败', 'error');
+  }
+}
+
 // 解析写入值
 function getWriteValues(): number[] | undefined {
   if (isReadOperation.value) return undefined;
@@ -453,15 +594,39 @@ function getWriteValues(): number[] | undefined {
   }
 
   // 场景 2: 手动模式
+  if (isReadOperation.value) return undefined;
+
+  const defaultEndian = selectedProfile.value?.data.protocol_summary.default_endian || 'ABCD';
+  const type = runMode.value === 'auto' ? (reg?.data_type || 'uint16') : manualDataType.value;
+  const endian = runMode.value === 'auto' ? (reg?.endian || defaultEndian) : manualEndian.value;
+
   if (isSingleWrite.value) {
-    return [writeValue.value];
+    return encodeValue(String(writeValue.value), type, endian);
   }
 
-  // 多值写入：解析逗号分隔的值
-  return writeValues.value
-    .split(',')
-    .map(s => parseInt(s.trim(), 10))
-    .filter(n => !isNaN(n));
+  // 多值写入
+  if (type === 'string') {
+    // 字符串处理：将整个输入框作为单一原文
+    const text = writeValues.value;
+    const bytes = new TextEncoder().encode(text);
+    const buf = new Uint8Array(quantity.value * 2); // 根据设定的寄存器数量分配空间
+    buf.set(bytes.slice(0, quantity.value * 2));
+    
+    const regs = [];
+    for (let i = 0; i < buf.length; i += 2) {
+      regs.push((buf[i] << 8) | (buf[i+1]));
+    }
+    return regs;
+  }
+
+  // 数字列表 (逗号分隔)
+  const valStrs = writeValues.value.split(',').filter(s => s.trim() !== '');
+  let allRegs: number[] = [];
+  valStrs.forEach(s => {
+    const encoded = encodeValue(s.trim(), type, endian);
+    allRegs = allRegs.concat(encoded);
+  });
+  return allRegs;
 }
 
 // 地址基准设置 (Base 0 / Base 1)
@@ -530,9 +695,8 @@ function updateAutoAddress() {
       functionCode.value = allowedCodes[0] as ModbusFunctionCode;
     }
     
-    const firstCode = allowedCodes[0] ?? functionCode.value;
-    const logicalOffset = getModbusOffset((reg.addr !== undefined ? reg.addr : 0), firstCode);
-    startAddress.value = logicalOffset;
+    // 逻辑偏移量：仅剥离 4xxxx 前缀 (如 40025 -> 25)
+    startAddress.value = getModbusOffset((reg.addr !== undefined ? reg.addr : 0), functionCode.value);
     quantity.value = reg.count || 1;
   }
 }
@@ -543,12 +707,28 @@ watch(selectedRegisterName, updateAutoAddress);
 // 监听 Base 开关，实时重算地址 (确保 useBase1 已定义)
 watch(useBase1, updateAutoAddress);
 
-// 监听多值写入的变化，自动同步数量字段
-watch(writeValues, (newVal) => {
+// 监听多值写入/手动模式类型变化，自动同步数量字段
+watch([writeValues, manualDataType, runMode, functionCode], () => {
   const isMultiWrite = [ModbusFunctionCode.WRITE_MULTIPLE_COILS, ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS].includes(functionCode.value);
-  if (isMultiWrite) {
-    const vals = newVal.split(',').filter(s => s.trim() !== '');
+  if (!isMultiWrite) return;
+
+  if (runMode.value === 'auto') {
+    // 如果是区块类型，数量严格锁定为点表定义，不根据输入框推算
+    if ((currentRegisterObj.value?.data_type as string) === 'block') {
+      quantity.value = currentRegisterObj.value?.count || 1;
+      return;
+    }
+    const vals = writeValues.value.split(',').filter(s => s.trim() !== '');
     quantity.value = vals.length;
+  } else {
+    // 手动模式支持 String 和 32位数据
+    if (manualDataType.value === 'string') {
+      // String 模式下，quantity 由用户手动微调，此处不自动改写，避免干扰输入
+      return;
+    }
+    const vals = writeValues.value.split(',').filter(s => s.trim() !== '');
+    const multiplier = ['float32', 'int32', 'uint32'].includes(manualDataType.value) ? 2 : 1;
+    quantity.value = vals.length * multiplier;
   }
 });
 
@@ -792,6 +972,25 @@ const latestReadResults = computed(() => {
             triggerAddr: expectedPhysicalAddr + (matchedReg.count || 1) - 1
           };
         } else if (parentReg) {
+          isFollower = true;
+        }
+      } 
+      // 手动模式解析逻辑：根据用户选中的数据类型进行自动汇总显示
+      else if (runMode.value === 'manual') {
+        const type = manualDataType.value;
+        const endian = manualEndian.value;
+        const count = ['float32', 'int32', 'uint32'].includes(type) ? 2 : 1;
+        
+        // 判断当前索引是否是解析起点 (例如 32 位数据每 2 个寄存器解析一次)
+        if (index % count === 0 && index + count <= displayVals.length) {
+          const virtualReg = { data_type: type, endian: endian, count: count };
+          const parsedValue = parseAutoValue(virtualReg, allVals, index, endian);
+          pendingSummary = {
+            type: 'summary',
+            text: `解析结果 (${type}) == ${parsedValue}`,
+            triggerAddr: currentPhysicalAddr + count - 1
+          };
+        } else if (index % count !== 0) {
           isFollower = true;
         }
       }
@@ -1221,12 +1420,12 @@ const latestReadResults = computed(() => {
         
         <div class="command-form-horizontal">
           <div class="form-row">
-            <div class="form-group">
+            <div class="form-group form-group-slave">
               <label>从站地址</label>
               <input type="number" v-model="slaveAddress" min="1" max="247" />
             </div>
             
-            <div class="form-group">
+            <div class="form-group form-group-fc">
               <label>功能码</label>
               <select 
                 v-model="functionCode" 
@@ -1240,10 +1439,12 @@ const latestReadResults = computed(() => {
               </select>
             </div>
 
-            <div class="form-group">
+            <div class="form-group form-group-addr">
               <div class="label-with-switch">
                 <!-- 自动模式下标题改为：寄存器名称 -->
-                <label>{{ runMode === 'auto' ? '寄存器名称' : '起始地址 (Dec)' }}</label>
+                <label :style="{ width: runMode === 'manual' ? '120px' : '180px' }">
+                  {{ runMode === 'auto' ? '寄存器名称' : '起始地址 (Dec)' }}
+                </label>
                 
                 <div class="base-switch">
                   <button 
@@ -1283,7 +1484,7 @@ const latestReadResults = computed(() => {
                   v-model="startAddress" 
                   :min="useBase1 ? 1 : 0" 
                   max="65535" 
-                  class="dec-input-large" 
+                  class="dec-input-small" 
                 />
 
                 <div class="plc-address-display">
@@ -1293,21 +1494,44 @@ const latestReadResults = computed(() => {
                 </div>
               </div>
             </div>
+
+            <!-- 新增：数据类型选择 (仅手动模式) -->
+            <div v-if="runMode === 'manual'" class="form-group form-group-manual-type">
+              <div class="label-with-endian">
+                <label>数据类型</label>
+                <!-- 仅在 32 位数据类型时显示字节序选择 -->
+                <select 
+                  v-if="['uint32', 'int32', 'float32'].includes(manualDataType)"
+                  v-model="manualEndian" 
+                  class="endian-mini-select"
+                  title="字节序 (Endian)"
+                >
+                  <option v-for="opt in endianOptions" :key="opt.value" :value="opt.value">
+                    {{ opt.value }}
+                  </option>
+                </select>
+              </div>
+              <select v-model="manualDataType" class="manual-type-select">
+                <option v-for="opt in manualDataTypeOptions" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
+            </div>
             
-            <div v-if="isReadOperation || !isSingleWrite" class="form-group">
+            <div v-if="isReadOperation || !isSingleWrite" class="form-group form-group-quantity">
                 <label>寄存器数量</label>
                 <input 
                   type="number" 
                   v-model="quantity" 
                   min="1" 
                   max="125" 
-                  :disabled="runMode === 'auto' || !isReadOperation"
-                  :title="!isReadOperation ? '在写多个寄存器模式下，数量自动由写入值的个数决定' : ''"
+                  :disabled="runMode === 'auto' || (runMode === 'manual' && manualDataType !== 'string' && !isReadOperation)"
+                  :title="(!isReadOperation && (runMode !== 'manual' || manualDataType !== 'string')) ? '在写多个寄存器模式下，数量自动由写入值的个数决定' : ''"
                 />
             </div>
             
             <div v-if="isSingleWrite" class="form-group">
-                <label>写入值</label>
+                <label>{{ manualDataType === 'string' && runMode === 'manual' ? '写入文本' : '写入值' }}</label>
                 <!-- 场景 1: 自动模式且有点表 Mapping -->
                 <select 
                   v-if="runMode === 'auto' && currentRegisterObj?.mapping" 
@@ -1324,8 +1548,12 @@ const latestReadResults = computed(() => {
             </div>
             
             <div v-if="!isReadOperation && !isSingleWrite" class="form-group grow">
-                <label>写入值 (逗号分隔)</label>
-                <input type="text" v-model="writeValues" placeholder="例如: 100, 200, 300" />
+                <label>{{ manualDataType === 'string' && runMode === 'manual' ? '写入文本内容' : '写入值 (逗号分隔)' }}</label>
+                <input 
+                  type="text" 
+                  v-model="writeValues" 
+                  :placeholder="manualDataType === 'string' && runMode === 'manual' ? '输入字符串原文' : '例如: 100, 200, 300'" 
+                />
             </div>
 
             <div class="form-actions-inline">
@@ -1589,6 +1817,54 @@ const latestReadResults = computed(() => {
         <div class="modal-footer">
           <button class="btn-cancel" @click="isWriteConfirmShow = false">取消操作</button>
           <button class="btn-execute" @click="executeActualWrite">确认下发指令</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 区块参数一键写入弹窗 -->
+    <div v-if="isBlockWriteShow" class="modal-overlay" @click.self="isBlockWriteShow = false">
+      <div class="modal-content block-write-modal">
+        <div class="modal-header primary">
+          <div class="header-main">
+            <h3>⚙️ 区块参数一键写入</h3>
+            <span class="header-subtitle">{{ currentBlockReg?.name }} (Addr: {{ startAddress }})</span>
+          </div>
+          <button class="btn-close" @click="isBlockWriteShow = false">×</button>
+        </div>
+        
+        <div class="modal-body block-form-body">
+          <div v-if="isBlockLoading" class="block-loading-overlay">
+            <div class="spinner"></div>
+            <span>正在预读设备当前值...</span>
+          </div>
+
+          <div class="block-fields-grid">
+            <div v-for="field in currentBlockReg?.block_fields" :key="field.name" class="block-field-item">
+              <label>
+                {{ field.name }}
+                <span v-if="field.unit" class="field-unit">({{ field.unit }})</span>
+              </label>
+              
+              <div class="field-input-wrapper">
+                <select v-if="field.mapping" v-model="blockFieldValues[field.name]">
+                  <option v-for="(label, val) in field.mapping" :key="val" :value="val">
+                    {{ label }}
+                  </option>
+                </select>
+                <input v-else type="number" v-model="blockFieldValues[field.name]" />
+                <div class="field-meta">Offset: +{{ field.offset }} ({{ field.data_type }})</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="block-write-hint">
+            💡 提示：系统已为您自动填入读取到的初始值。点击“保存并下发”后，系统将使用 0x10 功能码一次性更新整个区块（共 {{ currentBlockReg?.count }} 个寄存器）。
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="isBlockWriteShow = false">取消</button>
+          <button class="btn-execute-block" @click="executeBlockWrite">保存并整体下发</button>
         </div>
       </div>
     </div>
@@ -1977,20 +2253,29 @@ const latestReadResults = computed(() => {
   flex-shrink: 0;
 }
 
-.function-code-select {
-  width: 170px; 
-}
-
-/* 第三列：名称/地址区，自适应宽度消除外边距 */
-.form-group:nth-child(3) {
-  width: auto; 
+/* 固定宽度的表单组 */
+.form-group-slave {
+  width: 80px;
   flex-shrink: 0;
 }
 
-/* 从站地址 & 寄存器数量 */
-.form-group:first-child,
-.form-group:nth-child(4) {
-  width: 85px;
+.form-group-fc {
+  width: 170px;
+  flex-shrink: 0;
+}
+
+.form-group-addr {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.form-group-manual-type {
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.form-group-quantity {
+  width: 90px;
   flex-shrink: 0;
 }
 
@@ -2053,6 +2338,31 @@ const latestReadResults = computed(() => {
 
 .dec-input-large {
   width: 180px; /* 同步扩宽选择框 */
+}
+
+.dec-input-small {
+  width: 120px;
+}
+
+.manual-type-select {
+  width: 140px;
+}
+
+.label-with-endian {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.endian-mini-select {
+  height: 1.2rem !important; /* 超小高度 */
+  padding: 0 4px !important;
+  font-size: 0.7rem !important;
+  width: 54px !important;
+  background: var(--color-surface-hover) !important;
+  border-color: var(--color-primary) !important;
+  color: var(--color-primary) !important;
+  border-radius: 3px !important;
 }
 
 .plc-address-display {
@@ -3286,5 +3596,144 @@ const latestReadResults = computed(() => {
   width: 40px;
   text-align: justify;
   text-align-last: justify;
+}/* 区块写入弹窗样式 */
+.block-write-modal {
+  background: var(--color-surface);
+  width: 760px;
+  max-width: 95vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
 }
+
+.header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.header-subtitle {
+  font-size: 0.8rem;
+  opacity: 0.8;
+  font-weight: normal;
+}
+
+.block-form-body {
+  position: relative;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+.block-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+}
+
+.block-field-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.block-field-item label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.field-unit {
+  font-weight: normal;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.field-input-wrapper input,
+.field-input-wrapper select {
+  width: 100%;
+  padding: 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  font-size: 1rem;
+}
+
+.field-meta {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+.block-write-hint {
+  margin-top: 2rem;
+  padding: 1rem;
+  background: var(--color-surface-hover);
+  border-left: 4px solid var(--color-primary);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.block-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(2px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--color-primary-light);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.btn-execute-block {
+  padding: 0.7rem 2rem;
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  transition: all 0.2s;
+}
+
+.btn-execute-block:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.modal-header.primary {
+  background: var(--color-surface-hover);
+  border-bottom: 2px solid var(--color-primary);
+}
+
+.modal-footer {
+  padding: 1.25rem 1.5rem;
+  background: var(--color-surface-hover);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+
 </style>
