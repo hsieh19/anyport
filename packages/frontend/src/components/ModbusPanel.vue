@@ -1167,14 +1167,14 @@ const latestReadResults = computed(() => {
               :class="{ active: connectionType === 'serial' }"
               @click="connectionType = 'serial'"
             >
-              USB 直连
+              本地直连
             </button>
             <button
               class="mode-tab"
               :class="{ active: connectionType === 'mqtt' }"
               @click="connectionType = 'mqtt'"
             >
-              <span>Remote MQTT</span>
+              <span>远程MQTT</span>
               <span
                 class="ml-1 cursor-pointer"
                 @click.stop="
