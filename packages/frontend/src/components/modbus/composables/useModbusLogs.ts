@@ -48,8 +48,10 @@ export function useModbusLogs(state: ReturnType<typeof useModbusState>) {
         if (log && log.direction === 'tx') {
            const hexs = log.hex.split(' ');
            if (hexs.length >= 6) {
-             physicalStartAddr = (parseInt(hexs[2] || '0', 16) << 8) | parseInt(hexs[3] || '0', 16);
-             requestedQuantity = (parseInt(hexs[4] || '0', 16) << 8) | parseInt(hexs[5] || '0', 16);
+             // 根据协议类型动态调整偏移量 (RTU: 4,5; TCP: 10,11)
+             const offset = deviceStore.modbusMode === 'tcp' ? 6 : 0;
+             physicalStartAddr = (parseInt(hexs[2 + offset] || '0', 16) << 8) | parseInt(hexs[3 + offset] || '0', 16);
+             requestedQuantity = (parseInt(hexs[4 + offset] || '0', 16) << 8) | parseInt(hexs[5 + offset] || '0', 16);
            }
            break;
         }
@@ -176,6 +178,12 @@ export function useModbusLogs(state: ReturnType<typeof useModbusState>) {
         } else if (parentReg) {
           isFollower = true;
         }
+      } else if (state.runMode.value === 'manual') {
+        pendingSummaryC = {
+          type: 'summary',
+          text: `解析结果 (Coil) == ${val ? '1' : '0'}`,
+          triggerAddr: currentPhysicalAddr
+        };
       }
 
       const strVal = val ? '1' : '0';

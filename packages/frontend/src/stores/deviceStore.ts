@@ -8,6 +8,7 @@ import { BacnetMsTpAdapter, BacnetIpAdapter } from '@/protocols/bacnet';
 import { ProtocolType, FrameCheckResult, type IProtocolAdapter } from '@shared/types/protocol.types';
 import { type ConnectionConfig as GlobalConnectionConfig, type ITransportAdapter } from '@shared/types/transport.types';
 import { bytesToHexSpaced } from '@/utils/hex';
+import { translateCommError } from '@/utils/errorTranslator';
 
 // --- 类型定义 ---
 export type ConnectionType = 'serial' | 'mqtt' | 'bridge';
@@ -122,7 +123,12 @@ export const useDeviceStore = defineStore('device', () => {
             if (currentProtocol.value.includes('bacnet')) {
                 bacnetConnectionType.value = val;
             } else {
-                modbusConnectionType.value = val;
+                // 如果是本地模式(非 mqtt)，根据当前的 RTU/TCP 模式自动选择底层
+                if (val !== 'mqtt') {
+                    modbusConnectionType.value = (modbusMode.value === 'tcp') ? 'bridge' : 'serial';
+                } else {
+                    modbusConnectionType.value = val;
+                }
             }
         }
     });
@@ -242,8 +248,10 @@ export const useDeviceStore = defineStore('device', () => {
                 await (mqttTransport.value as any).selectGateway(mqttConfig.value.siteId, mqttConfig.value.gatewayId);
             }
             connectedRef.value = true;
+            // 记录用户的主动连接意图
+            explicitMqttConnected.value = true;
         } catch (error: any) {
-            errorRef.value = error.message;
+            errorRef.value = translateCommError(error.message);
             throw error;
         } finally {
             connectingRef.value = false;
@@ -287,7 +295,7 @@ export const useDeviceStore = defineStore('device', () => {
             await transport.value.connect(config);
             connectedRef.value = true;
         } catch (error: any) {
-            errorRef.value = error.message;
+            errorRef.value = translateCommError(error.message);
             throw error;
         } finally {
             connectingRef.value = false;
@@ -322,6 +330,8 @@ export const useDeviceStore = defineStore('device', () => {
             isBacnetConnected.value = false;
         } else {
             isModbusConnected.value = false;
+            // 用户主动断开，清除意图标志
+            explicitMqttConnected.value = false;
         }
         stopPing();
         if (!isModbusConnected.value && !isBacnetConnected.value) {
@@ -338,6 +348,8 @@ export const useDeviceStore = defineStore('device', () => {
         isMqttBrokerConnected.value = false;
         isModbusConnected.value = false;
         isBacnetConnected.value = false;
+        // 清除 MQTT 所有意图标志
+        explicitMqttConnected.value = false;
         stopPing();
         stopGatewayHeartbeatMonitor();
     }
@@ -436,32 +448,67 @@ export const useDeviceStore = defineStore('device', () => {
         modbusMode.value = mode;
         adapter.value = mode === 'rtu' ? rtuAdapter : tcpAdapter;
         currentProtocol.value = mode === 'rtu' ? ProtocolType.MODBUS_RTU : ProtocolType.MODBUS_TCP;
+
+        // 同时同步更新网关选项中的协议，保持 UI 状态一致
+        gatewayOptions.value.protocol = mode;
+
+        // 如果当前是本地直连(或桥接)，根据 RTU/TCP 模式自动切换底层传输
+        if (connectionType.value !== 'mqtt') {
+            connectionType.value = mode === 'rtu' ? 'serial' : 'bridge';
+        }
     }
 
     function updateConfig(config: any) { serialConfig.value = { ...serialConfig.value, ...config }; }
     function updateGatewayOptions(opts: any) { gatewayOptions.value = { ...gatewayOptions.value, ...opts }; }
     function saveMqttConfig(cfg: any) { mqttConfig.value = { ...mqttConfig.value, ...cfg }; }
-    function setConnectionType(type: ConnectionType) { connectionType.value = type; }
-    function clearLogs() { if (currentProtocol.value.includes('bacnet')) bacnetLogs.value = []; else modbusLogs.value = []; }
-    function handleError(err: any): void {
-        const msg = typeof err === 'string' ? err : (err.message || String(err));
-        const errorRef = currentProtocol.value.includes('bacnet') ? bacnetError : modbusError;
-        errorRef.value = msg;
+    // 记录在 MQTT 模式下，用户是否显式点击过“连接网关”
+    const explicitMqttConnected = ref(false);
 
-        // 将错误记录入通信日志，方便观察时序
+    function setConnectionType(type: ConnectionType) {
+        if (connectionType.value === type) return;
+        
+        connectionType.value = type;
+        
+        // 模式切换时，根据对应底层的真实生命周期状态以及用户意图进行恢复
+        if (type === 'mqtt') {
+            // 只有当用户显式点过连接，且底层 MQTT 其实一直连着时，才恢复 UI 状态
+            isModbusConnected.value = explicitMqttConnected.value && !!mqttTransport.value?.isConnected;
+        } else if (type === 'bridge') {
+            isModbusConnected.value = !!bridgeTransport.value?.isConnected;
+        } else if (type === 'serial') {
+            isModbusConnected.value = !!transport.value?.isConnected;
+        }
+        
+        // 只有在彻底断开时才清理 ping
+        if (!isModbusConnected.value) {
+            stopPing();
+            receiveBuffer.value = new Uint8Array(0);
+        }
+    }
+    function clearLogs() { if (currentProtocol.value.includes('bacnet')) bacnetLogs.value = []; else modbusLogs.value = []; }
+
+
+    function handleError(err: any): void {
+        const rawMsg = typeof err === 'string' ? err : (err.message || String(err));
+        const translatedMsg = translateCommError(rawMsg);
+        
+        const errorRef = currentProtocol.value.includes('bacnet') ? bacnetError : modbusError;
+        errorRef.value = translatedMsg;
+
+        // 将错误记录入通信日志
         const entry: LogEntry = {
             id: 'err-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
             timestamp: new Date(),
             direction: 'rx',
             data: new Uint8Array(0),
-            hex: 'ERROR: ' + msg,
-            parsed: { success: false, error: msg }
+            hex: 'ERROR: ' + translatedMsg,
+            parsed: { success: false, error: translatedMsg }
         };
         const targetLogs = currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs;
         targetLogs.value.unshift(entry);
         if (targetLogs.value.length > 500) targetLogs.value.pop();
 
-        console.error('通信错误:', msg);
+        console.error('通信错误:', rawMsg);
     }
 
     // Ping 逻辑复写 (ModbusPanel 使用)
@@ -481,16 +528,17 @@ export const useDeviceStore = defineStore('device', () => {
                 ip: result.pingTarget?.ip ?? result.ip,
                 port: result.pingTarget?.port ?? result.port,
                 latency: result.latency,
-                error: result.error,
+                error: result.error ? translateCommError(result.error) : undefined,
                 seq: result.seq,
                 localIp: result.localIp,
                 link: result.link
             }
         };
 
-        const targetLogs = currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs;
-        targetLogs.value.unshift(entry);
-        if (targetLogs.value.length > 500) targetLogs.value.pop();
+        // 核心修复：Ping 结果目前仅服务于 Modbus 诊断视图，应始终存入 modbusLogs
+        // 绝不能根据 currentProtocol 动来动去
+        modbusLogs.value.unshift(entry);
+        if (modbusLogs.value.length > 500) modbusLogs.value.pop();
     }
 
     function startPing() {
@@ -558,6 +606,44 @@ export const useDeviceStore = defineStore('device', () => {
 
 
 
+    async function probeBridge(ip: string, port: number) {
+        if (!bridgeTransport.value || !isModbusConnected.value) {
+            throw new Error('网桥未连接，请先点击"连接网关"');
+        }
+        
+        const startTime = Date.now();
+        try {
+            const res = await (bridgeTransport.value as any).probe(ip, port, 'tcp');
+            const latency = Date.now() - startTime;
+            
+            const errorMsg = res.status === 'error' ? translateCommError(res.message) : undefined;
+            
+            const entry: LogEntry = {
+                id: 'pb-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+                timestamp: new Date(),
+                direction: 'rx',
+                data: new Uint8Array(0),
+                hex: '',
+                pingResult: {
+                    success: res.status === 'ok',
+                    ip: ip,
+                    port: port,
+                    latency: latency,
+                    error: errorMsg,
+                    seq: 0,
+                    link: 'bridge'
+                }
+            };
+            const targetLogs = currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs;
+            targetLogs.value.unshift(entry);
+            if (targetLogs.value.length > 500) targetLogs.value.pop();
+            return res;
+        } catch (err: any) {
+            handleError(err);
+            throw err;
+        }
+    }
+
     return {
         transport, mqttTransport, bridgeTransport, adapter,
         isModbusConnected, isBacnetConnected, isModbusConnecting, isBacnetConnecting,
@@ -569,6 +655,6 @@ export const useDeviceStore = defineStore('device', () => {
         disconnect, disconnectGateway, disconnectBroker,
         sendCommand, addLog, clearLogs,
         updateConfig, updateGatewayOptions, saveMqttConfig, setModbusMode, setProtocol, setConnectionType,
-        isPinging, startPing, stopPing, removeGateway, clearOfflineGateways
+        isPinging, startPing, stopPing, removeGateway, clearOfflineGateways, probeBridge
     };
 });

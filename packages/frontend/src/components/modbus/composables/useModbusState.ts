@@ -24,9 +24,7 @@ export function useModbusState() {
     get: () => deviceStore.connectionType,
     set: (value: ConnectionType) => {
       deviceStore.setConnectionType(value);
-      if (value === 'serial') {
-        deviceStore.setModbusMode('rtu');
-      } else if (value === 'mqtt') {
+      if (value === 'mqtt') {
         deviceStore.setModbusMode(deviceStore.gatewayOptions.protocol);
       }
     }

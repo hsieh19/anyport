@@ -195,12 +195,16 @@ export function useModbusActions(state: ReturnType<typeof useModbusState>, lates
     state.isWriteConfirmShow.value = true;
 
     try {
+      const is32Bit = state.runMode.value === 'auto' 
+        ? (reg && ['float32', 'int32', 'uint32'].includes(reg.data_type))
+        : ['float32', 'int32', 'uint32'].includes(state.manualDataType.value);
+
       await deviceStore.sendCommand({
         protocol: ProtocolType.MODBUS_RTU,
         slaveAddress: state.slaveAddress.value,
         functionCode: readFC,
         startAddress: physicalAddress,
-        quantity: (reg && ['float32', 'int32', 'uint32'].includes(reg.data_type)) ? 2 : (reg?.count || 1)
+        quantity: is32Bit ? 2 : (reg?.count || 1)
       });
       // ✅ 不再使用延时，监听 latestReadResults 的更新
       // (监听逻辑已在 useModbusActions 返回前统一设置，或在此处设置一个临时监听)

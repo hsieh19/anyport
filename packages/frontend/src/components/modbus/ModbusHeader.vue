@@ -120,10 +120,19 @@ function togglePing() {
         deviceStore.startPing();
     }
 }
+
+async function probeLocalTcp() {
+    const target = deviceStore.gatewayOptions.tcpTarget;
+    try {
+        await deviceStore.probeBridge(target.ip, target.port);
+    } catch (err: any) {
+        actions.showToast(err.message, 'error');
+    }
+}
 </script>
 
 <template>
-    <section class="panel-section header-section">
+    <section class="panel-section header-section relative">
       <div class="header-row">
         <div class="header-left-col">
           <h2 class="section-title">
@@ -132,15 +141,27 @@ function togglePing() {
           </h2>
           <!-- 状态摘要 -->
           <div v-if="state.connectionType.value === 'mqtt'" class="header-status-summary">
-            <div class="status-row">
+            <div class="status-row" :class="{ 'status-connected': deviceStore.isMqttBrokerConnected }">
               <span class="status-dot" :class="deviceStore.isMqttBrokerConnected ? 'dot-on' : 'dot-off'"></span>
               <span class="status-label">Broker</span>
               <span>: {{ deviceStore.isMqttBrokerConnected ? '已连接' : '未连接' }}</span>
             </div>
-            <div class="status-row cursor-help" :title="currentGateway?.online ? gatewayTooltip : ''">
+            <div class="status-row cursor-help" :class="{ 'status-connected': currentGateway?.online }" :title="currentGateway?.online ? gatewayTooltip : ''">
               <span class="status-dot" :class="currentGateway?.online ? 'dot-on' : 'dot-off'"></span>
               <span class="status-label">网关</span>
               <span>: {{ currentGateway?.online ? '在线' : '离线' }}</span>
+            </div>
+          </div>
+          <div v-else class="header-status-summary">
+            <div class="status-row" :class="{ 'status-connected': deviceStore.modbusMode === 'rtu' && deviceStore.isModbusConnected }">
+              <span class="status-dot" :class="(deviceStore.modbusMode === 'rtu' && deviceStore.isModbusConnected) ? 'dot-on' : 'dot-off'"></span>
+              <span class="status-label">RTU</span>
+              <span>: {{ (deviceStore.modbusMode === 'rtu' && deviceStore.isModbusConnected) ? '已连接' : '未连接' }}</span>
+            </div>
+            <div class="status-row" :class="{ 'status-connected': deviceStore.modbusMode === 'tcp' && deviceStore.isModbusConnected }">
+              <span class="status-dot" :class="(deviceStore.modbusMode === 'tcp' && deviceStore.isModbusConnected) ? 'dot-on' : 'dot-off'"></span>
+              <span class="status-label">TCP</span>
+              <span>: {{ (deviceStore.modbusMode === 'tcp' && deviceStore.isModbusConnected) ? '已连接' : '未连接' }}</span>
             </div>
           </div>
         </div>
@@ -149,7 +170,7 @@ function togglePing() {
           <div class="inline-flex rounded-full bg-slate-100 p-1 shadow-inner items-center gap-1">
             <button
               class="mode-tab"
-              :class="{ active: state.connectionType.value === 'serial' }"
+              :class="{ active: ['serial', 'bridge'].includes(state.connectionType.value) }"
               @click="state.connectionType.value = 'serial'"
             >
               本地直连
@@ -242,20 +263,14 @@ function togglePing() {
                   <button
                     :class="{ active: deviceStore.gatewayOptions.protocol === 'rtu' }"
                     :disabled="deviceStore.isModbusConnected"
-                    @click="
-                      deviceStore.updateGatewayOptions({ protocol: 'rtu' });
-                      deviceStore.setModbusMode('rtu');
-                    "
+                    @click="deviceStore.setModbusMode('rtu')"
                   >
                     RTU
                   </button>
                   <button
                     :class="{ active: deviceStore.gatewayOptions.protocol === 'tcp' }"
                     :disabled="deviceStore.isModbusConnected"
-                    @click="
-                      deviceStore.updateGatewayOptions({ protocol: 'tcp' });
-                      deviceStore.setModbusMode('tcp');
-                    "
+                    @click="deviceStore.setModbusMode('tcp')"
                   >
                     TCP
                   </button>
@@ -316,27 +331,61 @@ function togglePing() {
             </div>
 
             <div class="config-group" v-else>
-              <select v-model="deviceStore.serialConfig.baudRate" :disabled="deviceStore.isModbusConnected">
-                <option v-for="rate in baudRateOptions" :key="rate" :value="rate">
-                  {{ rate }} bps
-                </option>
-              </select>
+              <!-- 本地直连：增加模式切换 -->
+              <div class="base-switch">
+                <button
+                  :class="{ active: deviceStore.modbusMode === 'rtu' }"
+                  :disabled="deviceStore.isModbusConnected"
+                  @click="deviceStore.setModbusMode('rtu')"
+                >
+                  RTU
+                </button>
+                <button
+                  :class="{ active: deviceStore.modbusMode === 'tcp' }"
+                  :disabled="deviceStore.isModbusConnected"
+                  @click="deviceStore.setModbusMode('tcp')"
+                >
+                  TCP
+                </button>
+              </div>
 
-              <select v-model="deviceStore.serialConfig.dataBits" :disabled="deviceStore.isModbusConnected">
-                <option :value="7">7 数据位</option>
-                <option :value="8">8 数据位</option>
-              </select>
+              <!-- 本地 RTU 模式：显示串口参数 -->
+              <template v-if="deviceStore.modbusMode === 'rtu'">
+                <select v-model="deviceStore.serialConfig.baudRate" :disabled="deviceStore.isModbusConnected">
+                  <option v-for="rate in baudRateOptions" :key="rate" :value="rate">
+                    {{ rate }} bps
+                  </option>
+                </select>
 
-              <select v-model="deviceStore.serialConfig.stopBits" :disabled="deviceStore.isModbusConnected">
-                <option :value="1">1 停止位</option>
-                <option :value="2">2 停止位</option>
-              </select>
+                <select v-model="deviceStore.serialConfig.dataBits" :disabled="deviceStore.isModbusConnected">
+                  <option :value="7">7 数据位</option>
+                  <option :value="8">8 数据位</option>
+                </select>
 
-              <select v-model="deviceStore.serialConfig.parity" :disabled="deviceStore.isModbusConnected">
-                <option value="none">无校验</option>
-                <option value="even">偶校验</option>
-                <option value="odd">奇校验</option>
-              </select>
+                <select v-model="deviceStore.serialConfig.stopBits" :disabled="deviceStore.isModbusConnected">
+                  <option :value="1">1 停止位</option>
+                  <option :value="2">2 停止位</option>
+                </select>
+
+                <select v-model="deviceStore.serialConfig.parity" :disabled="deviceStore.isModbusConnected">
+                  <option value="none">无校验</option>
+                  <option value="even">偶校验</option>
+                  <option value="odd">奇校验</option>
+                </select>
+              </template>
+
+              <!-- 本地 TCP 模式：显示桥接端点 -->
+              <template v-else>
+                <div class="flex items-center gap-1.5 flex-1 min-w-[200px]">
+                  <input
+                    type="text"
+                    v-model="tcpEndpoint"
+                    :disabled="deviceStore.isModbusConnected"
+                    placeholder="127.0.0.1:502 (TCP 桥接)"
+                    class="flex-1"
+                  />
+                </div>
+              </template>
             </div>
 
             <!-- MQTT 模式：Broker 连接状态条 -->
@@ -357,12 +406,24 @@ function togglePing() {
                 { 'min-w-[96px] md:min-w-[110px]': state.connectionType.value === 'mqtt' },
                 { connected: deviceStore.isModbusConnected, connecting: deviceStore.isModbusConnecting }
               ]"
+              style="height: 32px; padding: 0 12px; margin-left: 0; flex-shrink: 0; display: flex; align-items: center; gap: 4px;"
               :disabled="deviceStore.isModbusConnecting || (!deviceStore.isSupported && state.connectionType.value === 'serial') || (state.connectionType.value === 'mqtt' && !deviceStore.isMqttBrokerConnected && !deviceStore.isModbusConnected)"
               @click="toggleConnection"
             >
-              <span v-if="deviceStore.isModbusConnecting" class="spinner"></span>
+              <span v-if="deviceStore.isModbusConnecting" class="spinner" style="width: 12px; height: 12px; border-width: 2px;"></span>
               {{ deviceStore.isModbusConnected ? '断开网关' : '连接网关' }}
             </button>
+
+            <!-- 本地模式探测 (回归正常位次和样式) -->
+            <button
+              v-if="state.connectionType.value !== 'mqtt' && deviceStore.modbusMode === 'tcp' && deviceStore.isModbusConnected"
+              class="btn-ping"
+              style="margin-left: 8px; height: 32px;"
+              @click="probeLocalTcp"
+            >
+              📡 Ping
+            </button>
+
             <button
               v-if="deviceStore.isModbusConnected && state.connectionType.value === 'mqtt' && deviceStore.gatewayOptions.protocol === 'tcp'"
               class="btn-ping"
@@ -371,6 +432,21 @@ function togglePing() {
             >
               {{ deviceStore.isPinging ? '🔴 Stop' : '📡 Ping' }}
             </button>
+
+            <!-- 本地 TCP 提示：放在连接按钮后 -->
+            <div 
+              v-if="state.connectionType.value !== 'mqtt' && deviceStore.modbusMode === 'tcp'"
+              class="help-icon ml-1.5 flex items-center self-center"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; display: inline-block; vertical-align: middle;" class="info-svg text-gray-400 hover:text-indigo-500 cursor-help transition-colors">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+              <div class="tooltip" style="background-color: #fff9c4 !important; color: #333333 !important; white-space: nowrap !important; bottom: 125% !important; padding: 10px !important; border: 1px solid #ddd !important; border-radius: 4px !important; box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;">
+                本地 TCP 调试依赖于 <code>anyport-bridge</code> 桥接程序。请确保本地服务（默认 8081）已就绪。
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -380,10 +456,6 @@ function togglePing() {
       </div>
       <div v-else-if="state.connectionType.value === 'serial' && !deviceStore.isSupported" class="warning-banner">
         ⚠️ 当前浏览器不支持 Web Serial API。
-      </div>
-      <div v-if="deviceStore.modbusError" class="error-banner">
-        ❌ {{ deviceStore.modbusError }}
-        <button class="close-btn" @click="deviceStore.modbusError = null" style="background:none;border:none;color:inherit;cursor:pointer;float:right;">×</button>
       </div>
     </section>
 </template>

@@ -433,6 +433,7 @@ export class MqttTransport implements ITransportAdapter {
     }
   }
 
+
   onPingResult(callback: (result: Record<string, any>) => void): void {
     this.pingCallback = callback;
   }

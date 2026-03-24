@@ -16,8 +16,12 @@
 
 - **连接方式**
   - 本地串口：基于 Web Serial API，支持选择串口并配置波特率、数据位、停止位和校验位。
-  - MQTT 远程网关：通过 MQTT Broker 与 ESP32-C3 网关固件配合，支持将 Modbus RTU/TCP 请求通过 MQTT 转发到现场设备，并回传响应。
+  - MQTT 远程网关：通过 MQTT Broker 与 ESP32-C3 网关固件配合，支持将 Modbus RTU/TCP 请求通过 MQTT 转发到现场设备，并提供远程网络诊断。
+  - 本地桥接 (Anyport Bridge)：通过配套的 Go 编写的本地桥接程序，实现浏览器直接访问本地局域网内的 Modbus TCP 设备或 BACnet 设备，无需硬件网关。
 - **协议能力**
+- **智能诊断及错误处理**
+  - 多语言错误翻译：内置通讯错误解析引擎，将底层协议 / 网络 / 系统错误转换为直观的中文提示（如“网关硬件 Socket 资源耗尽”或“目标拒绝连接”）。
+  - 连接自动恢复：具备智能连接意图识别，支持在页面刷新或网络波动后自动恢复 MQTT / 桥接连接。
   - Modbus RTU：完整支持 01/02/03/04/05/06/15/16 功能码，内置 CRC‑16 校验、请求帧编码与响应帧解析。
   - Modbus TCP：内置 `ModbusTcpAdapter`，可配合 ESP32 网关固件通过以太网访问 Modbus TCP 设备。
 - **调试体验**
@@ -88,8 +92,9 @@ anyport/
 本项目采用 Monorepo 结构管理：
 
 - `packages/frontend`: 前端应用 (Vue 3 + Vite)
-- `packages/shared`: 共享类型定义和工具库
-- `esp32/AnyPortGateway`: ESP32-C3 网关固件工程，包含 MQTT 客户端、以太网/W5500 初始化以及 Modbus RTU/TCP 转发逻辑
+- `packages/shared`: 跨项目共享的协议类型定义与工具库
+- `esp32/AnyPortGateway`: ESP32-C3 核心网关固件，集成 W5500 以太网驱动与 MQTT 转发功能
+- `tools/anyport-bridge`: 基于 Go 编写的跨平台本地桥接程序，实现 Modbus TCP & BACnet 穿透访问
 
 ## 🚀 本地运行与开发
 
