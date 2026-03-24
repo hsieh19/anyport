@@ -1,6 +1,6 @@
 {
   "name": "anyport",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "description": "多协议调试工具 - 企业级离线可用的工业协议转换平台",
   "scripts": {
