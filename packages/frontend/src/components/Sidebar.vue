@@ -35,7 +35,7 @@ function selectTab(id: string) {
       </div>
       <p class="version">v{{ appVersion }}</p>
     </div>
-    
+
     <nav class="sidebar-nav">
       <div 
         v-for="item in menuItems" 
@@ -49,6 +49,10 @@ function selectTab(id: string) {
         <span v-if="item.disabled" class="nav-badge">WIP</span>
       </div>
     </nav>
+
+    <div class="sidebar-footer">
+      <p class="copyright">© 2026 Hotwon-CD2-Hsieh</p>
+    </div>
   </aside>
 </template>
 
@@ -94,6 +98,20 @@ function selectTab(id: string) {
   flex-direction: column;
   gap: 0.25rem;
   overflow-y: auto;
+  flex: 1;
+}
+
+.sidebar-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.copyright {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  text-align: center;
+  margin: 0;
+  white-space: nowrap;
 }
 
 .nav-item {

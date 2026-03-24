@@ -35,5 +35,9 @@
     "src/**/*.tsx",
     "src/**/*.vue",
     "../shared/src/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/*.Bak.vue",
+    "src/**/*.bak.vue"
   ]
 }
