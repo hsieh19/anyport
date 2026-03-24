@@ -1,7 +1,7 @@
 import { ref, computed, watch, onMounted, onActivated } from 'vue';
 import { useDeviceStore, type ConnectionType } from '@/stores/deviceStore';
 import { useProfileStore } from '@/stores/profileStore';
-import { ModbusFunctionCode, MODBUS_FUNCTION_CODE_OPTIONS, normalizeFuncCodes, getModbusOffset } from '@/protocols/modbus';
+import { ModbusFunctionCode, normalizeFuncCodes, getModbusOffset } from '@/protocols/modbus';
 
 export function useModbusState() {
   const deviceStore = useDeviceStore();

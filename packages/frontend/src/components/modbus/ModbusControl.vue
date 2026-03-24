@@ -59,7 +59,7 @@ const fullRawFrame = computed(() => actions.getFullRawFrame(isReadOperation.valu
 
 const frameInterpretation = computed(() => {
   const hexs = fullRawFrame.value.split(' ');
-  return interpretFrame(hexs, isReadOperation.value, false, deviceStore.modbusMode as 'rtu' | 'tcp');
+  return interpretFrame(hexs, false, deviceStore.modbusMode as 'rtu' | 'tcp');
 });
 
 function setBase(val: boolean) {

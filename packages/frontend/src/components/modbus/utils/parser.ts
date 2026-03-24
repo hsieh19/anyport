@@ -7,7 +7,7 @@ export interface FramePart {
   value: string;
 }
 
-export function interpretFrame(hexs: string[], isRead: boolean, isRx: boolean = false, mode: 'rtu' | 'tcp' = 'rtu'): FramePart[] {
+export function interpretFrame(hexs: string[], isRx: boolean = false, mode: 'rtu' | 'tcp' = 'rtu'): FramePart[] {
   if (hexs.length < 2) return [];
 
   const parts: FramePart[] = [];
@@ -22,7 +22,7 @@ export function interpretFrame(hexs: string[], isRead: boolean, isRx: boolean = 
     // PDU 部分从第 7 字节 (index 7) 开始
     const pdu = hexs.slice(7);
     if (pdu.length > 0) {
-      interpretPdu(pdu, isRead, isRx, parts);
+      interpretPdu(pdu, isRx, parts);
     }
   } else {
     // --- Modbus RTU 解析 ---
@@ -30,19 +30,19 @@ export function interpretFrame(hexs: string[], isRead: boolean, isRx: boolean = 
     if (hexs.length >= 3) {
       const pdu = hexs.slice(1, -2); // 掐头 (Slave) 去尾 (CRC)
       const crc = hexs.slice(-2);
-      interpretPdu(pdu, isRead, isRx, parts);
+      interpretPdu(pdu, isRx, parts);
       parts.push({ name: '校验码 (CRC16)', value: `${crc[0]} ${crc[1]}` });
     } else {
       // 报文长度不足 3，仅显示 Slave 和 FC
       const pdu = hexs.slice(1);
-      interpretPdu(pdu, isRead, isRx, parts);
+      interpretPdu(pdu, isRx, parts);
     }
   }
 
   return parts;
 }
 
-function interpretPdu(pdu: string[], isRead: boolean, isRx: boolean, parts: FramePart[]) {
+function interpretPdu(pdu: string[], isRx: boolean, parts: FramePart[]) {
   if (pdu.length === 0) return;
 
   const fcHex = pdu[0]!;

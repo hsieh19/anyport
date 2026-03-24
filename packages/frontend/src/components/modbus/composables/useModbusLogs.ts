@@ -23,14 +23,7 @@ export function useModbusLogs(state: ReturnType<typeof useModbusState>) {
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`;
   }
 
-  function isReadTx(hexStr: string) {
-    const parts = hexStr.split(' ');
-    const mode = deviceStore.modbusMode;
-    const fcIndex = mode === 'tcp' ? 7 : 1;
-    if (parts.length <= fcIndex) return false;
-    const fc = parseInt(parts[fcIndex] || '0', 16);
-    return [1, 2, 3, 4].includes(fc);
-  }
+
 
   // 计算属性：提取最近一次成功读取的寄存器结果 (核心搬迁自 ModbusPanel.vue)
   const latestReadResults = computed(() => {
@@ -212,7 +205,6 @@ export function useModbusLogs(state: ReturnType<typeof useModbusState>) {
     logs: computed(() => deviceStore.modbusLogs),
     clearLogs: () => deviceStore.clearLogs(),
     displayFormat: state.displayFormat,
-    isReadTx,
     formatTime
   };
 }

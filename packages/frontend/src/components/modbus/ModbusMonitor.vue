@@ -17,7 +17,6 @@ const {
   clearLogs,
   displayFormat,
   latestReadResults,
-  isReadTx,
   formatTime
 } = useModbusLogs(props.state);
 
@@ -86,7 +85,7 @@ const {
                   <div class="tooltip rx-log-tooltip">
                     <div class="tooltip-title">报文结构解析</div>
                     <div class="tooltip-content">
-                      <div v-for="part in interpretFrame(log.hex.split(' '), isReadTx(log.hex), log.direction === 'rx', deviceStore.modbusMode as 'rtu' | 'tcp')" :key="part.name" class="tooltip-item">
+                      <div v-for="part in interpretFrame(log.hex.split(' '), log.direction === 'rx', deviceStore.modbusMode as 'rtu' | 'tcp')" :key="part.name" class="tooltip-item">
                         <span class="p-name">{{ part.name }}:</span>
                         <span class="p-value">{{ part.value }}</span>
                       </div>
