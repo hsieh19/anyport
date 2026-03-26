@@ -158,7 +158,7 @@ async function toggleConnection() {
     if (protocolMode.value === 'ip') {
       deviceStore.setConnectionType('bridge');
       deviceStore.updateGatewayOptions({
-        protocol: 'tcp',
+        protocol: 'udp',
         tcpTarget: { ip: targetIp.value, port: 47808 }
       });
     } else {

@@ -35,7 +35,8 @@ export class LocalBridgeTransport implements ITransportAdapter {
         const cfg = config as any;
         if (cfg?.tcpTarget?.ip) {
             this.setTarget(cfg.tcpTarget.ip, cfg.tcpTarget.port || 502);
-            this.protocol = 'tcp';
+            // 改进识别逻辑：仅当明确指定为 'tcp' 时才走 TCP，否则默认 UDP (BACnet/Modbus RTU over Bridge)
+            this.protocol = cfg.protocol === 'tcp' ? 'tcp' : 'udp';
         } else {
             this.protocol = 'udp';
         }

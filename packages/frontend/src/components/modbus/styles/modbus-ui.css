@@ -646,18 +646,34 @@
   gap: 0.8rem;
 }
 
-.rx-log-tooltip {
+.rx-log-tooltip,
+.tx-preview-tooltip {
   top: 100% !important;
   /* 强制向下弹出 */
   bottom: auto !important;
-  left: 0 !important;
   transform: translateY(10px) !important;
-  margin-top: 5px;
+  margin-top: 12px;
+}
+
+/* 接收日志提示框：靠左对齐，防止超出屏幕左侧 */
+.rx-log-tooltip {
+  left: 0 !important;
+}
+
+/* 发送报文预览提示框：居中对齐，视觉更平衡 */
+.tx-preview-tooltip {
+  left: 50% !important;
+  transform: translateX(-50%) translateY(10px) !important;
 }
 
 .help-icon:hover .rx-log-tooltip {
   opacity: 1 !important;
   transform: translateY(0) !important;
+}
+
+.help-icon:hover .tx-preview-tooltip {
+  opacity: 1 !important;
+  transform: translateX(-50%) translateY(0) !important;
 }
 
 .log-help .tooltip {

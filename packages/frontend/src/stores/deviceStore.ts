@@ -278,7 +278,12 @@ export const useDeviceStore = defineStore('device', () => {
                     bridgeTransport.value = new LocalBridgeTransport();
                     bridgeTransport.value.onData(handleData);
                 }
-                await bridgeTransport.value.connect(gatewayOptions.value as any);
+                // 构造桥接配置，强制指定协议：BACnet IP 使用 UDP 转发，其余遵循网关配置
+                const bridgeConfig = {
+                    ...gatewayOptions.value,
+                    protocol: protocol.toLowerCase().includes('bacnet') ? 'udp' : gatewayOptions.value.protocol
+                };
+                await bridgeTransport.value.connect(bridgeConfig as any);
                 connectedRef.value = true;
                 return;
             }
