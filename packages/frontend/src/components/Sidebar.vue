@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
+import { Coffee } from 'lucide-vue-next';
+import SponsorDialog from './SponsorDialog.vue';
 
 const emits = defineEmits<{
   (e: 'change', value: string): void
@@ -7,6 +9,7 @@ const emits = defineEmits<{
 
 const appVersion = __APP_VERSION__;
 const activeTab = ref('modbus');
+const showSponsor = ref(false);
 
 const menuItems = [
   { id: 'modbus', label: 'Modbus 调试', icon: '📡' },
@@ -51,8 +54,15 @@ function selectTab(id: string) {
     </nav>
 
     <div class="sidebar-footer">
+      <button class="sponsor-trigger" @click="showSponsor = true">
+        <Coffee :size="16" />
+        <span>支持作者</span>
+      </button>
       <p class="copyright">© 2026 Hotwon-CD2-Hsieh</p>
     </div>
+
+    <!-- 赞赏弹窗 -->
+    <SponsorDialog v-model:show="showSponsor" />
   </aside>
 </template>
 
@@ -102,16 +112,44 @@ function selectTab(id: string) {
 }
 
 .sidebar-footer {
-  padding: 1rem 1.5rem;
+  padding: 1.25rem 1.5rem;
   border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sponsor-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.6rem;
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sponsor-trigger:hover {
+  background: var(--gradient-primary);
+  color: white;
+  border-color: transparent;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
 
 .copyright {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: var(--color-text-secondary);
   text-align: center;
   margin: 0;
   white-space: nowrap;
+  opacity: 0.7;
 }
 
 .nav-item {
