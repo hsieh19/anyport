@@ -27,18 +27,34 @@ export function normalizeFuncCodes(input: any): number[] {
  */
 export function getModbusOffset(addr: number | string, _fc: number | string): number {
   const numAddr = typeof addr === 'string' ? parseInt(addr, 10) : addr;
+  const fc = Number(_fc);
 
   let offset = numAddr;
-  // 仅剥离区间前缀，不进行任何硬编码的减法（如 -1）
-  if (numAddr >= 40000 && numAddr <= 49999) {
-    offset = numAddr - 40000;
-  } else if (numAddr >= 30000 && numAddr <= 39999) {
-    offset = numAddr - 30000;
-  } else if (numAddr >= 10000 && numAddr <= 19999) {
-    offset = numAddr - 10000;
+
+  // 1. 优先判定 6 位 PLC 地址段 (Modicon 6-digit)
+  if (numAddr >= 400001 && numAddr <= 465535) {
+    return numAddr - 400000;
+  } else if (numAddr >= 300001 && numAddr <= 365535) {
+    return numAddr - 300000;
+  } else if (numAddr >= 100001 && numAddr <= 165535) {
+    return numAddr - 100000;
+  } 
+
+  // 2. 5 位 PLC 地址判断 (Modicon 5-digit)
+  // 结合功能码判断，防止在线圈/离散输入大偏移量时产生误判定
+  if (numAddr >= 40001 && numAddr <= 49999) {
+    // 4xxxx 通常是保持寄存器，除非 FC 指明是读写线圈
+    if (![1, 2, 5, 15].includes(fc)) return numAddr - 40000;
+  } else if (numAddr >= 30001 && numAddr <= 39999) {
+    // 3xxxx 通常是输入寄存器
+    if (![1, 2, 5, 15].includes(fc)) return numAddr - 30000;
+  } else if (numAddr >= 10001 && numAddr <= 19999) {
+    // 1xxxx 歧义最大：可能是 0x 段的 10001 偏移，也可能是 1x 段的 1 偏移
+    // 仅当功能码明确为 02 (读离散输入) 时剥离前缀
+    if (fc === 2) return numAddr - 10000;
   }
-  
-  // 40001 -> 1, 40025 -> 25
+
+  // 返回 1-indexed 地址或原样返回
   return offset;
 }
 

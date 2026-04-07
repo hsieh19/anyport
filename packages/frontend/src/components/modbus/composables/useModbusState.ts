@@ -97,21 +97,33 @@ export function useModbusState() {
   // 计算属性：PLC 地址 (Modicon 寻址)
   const plcAddress = computed(() => {
     const addr = startAddress.value;
+    // 归一化为从 1 开始的地址 (PLC Base1 格式)
+    const base1Addr = useBase1.value ? addr : addr + 1;
+
+    const format = (prefix: number) => {
+      if (base1Addr > 9999) {
+        // 6位寻址模式：前缀占第6位，后5位为地址偏移
+        return (prefix * 100000 + base1Addr).toString().padStart(6, '0');
+      }
+      // 5位寻址模式
+      return (prefix * 10000 + base1Addr).toString().padStart(5, '0');
+    };
+
     switch (functionCode.value) {
       case ModbusFunctionCode.READ_COILS:
       case ModbusFunctionCode.WRITE_SINGLE_COIL:
       case ModbusFunctionCode.WRITE_MULTIPLE_COILS:
-        return addr.toString().padStart(5, '0');
+        return format(0);
       case ModbusFunctionCode.READ_DISCRETE_INPUTS:
-        return (10000 + addr).toString();
+        return format(1);
       case ModbusFunctionCode.READ_INPUT_REGISTERS:
-        return (30000 + addr).toString();
+        return format(3);
       case ModbusFunctionCode.READ_HOLDING_REGISTERS:
       case ModbusFunctionCode.WRITE_SINGLE_REGISTER:
       case ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS:
-        return (40000 + addr).toString();
+        return format(4);
       default:
-        return addr.toString();
+        return base1Addr.toString();
     }
   });
 

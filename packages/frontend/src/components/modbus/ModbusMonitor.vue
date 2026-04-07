@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { useModbusLogs } from './composables/useModbusLogs';
 import { interpretFrame } from './utils/parser';
 import { useDeviceStore } from '@/stores/deviceStore';
@@ -20,6 +21,12 @@ const {
   formatTime
 } = useModbusLogs(props.state);
 
+// 仅统计真实数据行（过滤掉解析总结行），并判定单位
+const dataCount = computed(() => latestReadResults.value.filter((i: any) => i.type === 'data' || !i.type).length);
+const isBitMode = computed(() => {
+  const lastRx = logs.value.find((l: any) => l.direction === 'rx' && l.parsed);
+  return lastRx?.parsed?.coils !== undefined;
+});
 </script>
 
 <template>
@@ -121,8 +128,8 @@ const {
         <h2 class="section-title">
           <span class="icon">📊</span>
           数据读取结果
-          <div class="result-hint text-xs font-normal text-gray-400 ml-2" v-if="latestReadResults.length">
-            ({{ latestReadResults.length }} 个点)
+          <div class="result-hint text-xs font-normal text-gray-400 ml-2" v-if="dataCount > 0">
+            ({{ dataCount }} 个{{ isBitMode ? '点' : '寄存器' }})
           </div>
         </h2>
         
