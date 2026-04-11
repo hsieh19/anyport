@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import {  } from 'vue';
+import { ref } from 'vue';
+
+// 如果你有固定的 Worker 域名，请将下面的地址补全
+const rewardImgUrl = 'https://update.anyport.one/anyport/reward.png'; 
 
 interface Props {
   show: boolean;
@@ -44,7 +47,7 @@ function handleClose() {
                 <!-- 基础隐私保护：禁用右键、拖放、不发送 Referrer -->
                 <img 
                   v-if="props.show"
-                  src="/wechat-reward.png" 
+                  :src="rewardImgUrl" 
                   alt="Reward Code" 
                   class="reward-qr"
                   referrerpolicy="no-referrer"
