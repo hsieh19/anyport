@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import {  } from 'vue';
 
 // 如果你有固定的 Worker 域名，请将下面的地址补全
 const rewardImgUrl = 'https://update.anyport.one/anyport/reward.png'; 
