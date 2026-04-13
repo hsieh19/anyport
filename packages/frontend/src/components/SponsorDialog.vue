@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import {  } from 'vue';
 
-// 如果你有固定的 Worker 域名，请将下面的地址补全
-const rewardImgUrl = 'https://update.anyport.one/anyport/reward.png'; 
 
 interface Props {
   show: boolean;
@@ -18,6 +16,27 @@ const emit = defineEmits<{
 const handleImageProtection = (e: Event) => {
   e.preventDefault();
 };
+
+const workerBase = 'https://update.anyport.one';
+const rewardImgUrl = `${workerBase}/anyport/reward.png`;
+
+function handleDownload() {
+  // 1. 先请求签名地址
+  fetch(`${workerBase}/anyport/get-link?ver=bridge`)
+    .then(res => res.json())
+    .then(data => {
+      if (data.url) {
+        // 2. 使用带签名的地址进行下载
+        window.open(data.url, '_blank');
+      } else {
+        alert('获取下载链接失败，请稍后重试');
+      }
+    })
+    .catch(err => {
+      console.error('Download error:', err);
+      alert('网络错误，无法连接下载服务器');
+    });
+}
 
 function handleClose() {
   emit('update:show', false);
@@ -36,7 +55,7 @@ function handleClose() {
           <div v-if="props.show" class="sponsor-card">
             <header class="sponsor-header">
               <div class="title-group">
-                <h3>💖 支持作者</h3>
+                <h3>💖 支持作者 & 下载插件</h3>
                 <p class="subtitle">感谢支持 Anyport 的开源开发</p>
               </div>
               <button class="btn-close" @click="handleClose">×</button>
@@ -62,8 +81,8 @@ function handleClose() {
             </section>
 
             <footer class="sponsor-footer">
-              <button class="btn-done" @click="handleClose">
-                好的，继续使用
+              <button class="btn-done" @click="handleDownload">
+                下载 anyport-bridge
               </button>
             </footer>
           </div>

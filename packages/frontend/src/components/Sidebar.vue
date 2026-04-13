@@ -56,7 +56,7 @@ function selectTab(id: string) {
     <div class="sidebar-footer">
       <button class="sponsor-trigger" @click="showSponsor = true">
         <Coffee :size="16" />
-        <span>支持作者</span>
+        <span>支持作者&下载插件</span>
       </button>
       <p class="copyright">© 2026 Hotwon-CD2-Hsieh</p>
     </div>
