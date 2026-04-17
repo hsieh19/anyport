@@ -1,6 +1,6 @@
 {
     "name": "@anyport/shared",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "private": true,
     "description": "Anyport 共享类型定义",
     "main": "./dist/index.js",

@@ -154,7 +154,7 @@ export function getExtendedValue(allValues: number[], offset: number, dataType: 
 /**
  * 核心解析函数 (根据点表定义解析数值)
  */
-export function parseAutoValue(regObj: any, allValues: any[], offset: number, defaultEndian: string = 'ABCD'): string | null {
+export function parseAutoValue(regObj: any, allValues: any[], offset: number, defaultEndian: string = 'ABCD', precision: number = 2): string | null {
   if (!regObj) return null;
 
   let val: any;
@@ -243,7 +243,7 @@ export function parseAutoValue(regObj: any, allValues: any[], offset: number, de
   }
 
   if (!isCoil && !isString && regObj.scale !== undefined) {
-    val = (Number(val) * regObj.scale).toFixed(3);
+    val = (Number(val) * regObj.scale).toFixed(precision);
     val = parseFloat(val);
   }
 

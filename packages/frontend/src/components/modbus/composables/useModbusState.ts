@@ -91,6 +91,9 @@ export function useModbusState() {
   const currentBlockReg = ref<any>(null);
   const blockFieldValues = ref<Record<string, any>>({});
 
+  // 是否显示持续采集面板
+  const isCollectionVisible = ref(false);
+
   // 记录最后一次发送上下文（用于匹配响应）
   const lastSentContext = ref<{ fc: number; addr: number; time: number } | null>(null);
 
@@ -219,6 +222,7 @@ export function useModbusState() {
     isBlockLoading,
     currentBlockReg,
     blockFieldValues,
+    isCollectionVisible,
     lastSentContext,
     onlineGateways,
   };

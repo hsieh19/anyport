@@ -1,7 +1,7 @@
 {
   "name": "@anyport/frontend",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.9",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@anyport/shared": "workspace:*",
+    "echarts": "^6.0.0",
     "idb": "^8.0.3",
     "lucide-vue-next": "^0.574.0",
     "mqtt": "^5.15.0",

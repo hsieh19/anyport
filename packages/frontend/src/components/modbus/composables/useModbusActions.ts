@@ -1,5 +1,6 @@
 import { watch, type ComputedRef } from 'vue';
 import { useDeviceStore } from '@/stores/deviceStore';
+import { useCollectionStore } from '@/stores/collectionStore';
 import { ProtocolType } from '@shared/types/protocol.types';
 import { 
   ModbusFunctionCode, 
@@ -15,6 +16,7 @@ import type { useModbusState } from './useModbusState';
 
 export function useModbusActions(state: ReturnType<typeof useModbusState>, latestReadResults?: ComputedRef<any[]>) {
   const deviceStore = useDeviceStore();
+  const collectionStore = useCollectionStore();
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     state.toast.value = { show: true, message, type };
@@ -96,6 +98,7 @@ export function useModbusActions(state: ReturnType<typeof useModbusState>, lates
 
   // ✅ 实际执行写入（由弹窗确认后调用）
   async function executeActualWrite() {
+    try { collectionStore?.pauseForManual?.(); } catch(e) {}
     state.isWriteConfirmShow.value = false;
     const reg = state.currentRegisterObj.value;
     const physicalAddress = state.useBase1.value ? Math.max(0, state.startAddress.value - 1) : state.startAddress.value;
@@ -146,6 +149,14 @@ export function useModbusActions(state: ReturnType<typeof useModbusState>, lates
 
   // ✅ 发送命令入口（含写入确认弹窗逻辑）
   async function sendCommand() {
+    // 告知采集 Store 手动操作正在进行，触发避让
+    try { collectionStore?.pauseForManual?.(); } catch(e) {}
+    
+    // 同步从站号到采集 Store
+    if (collectionStore) {
+        collectionStore.slaveId = state.slaveAddress.value;
+    }
+
     if (!deviceStore.isModbusConnected) {
       showToast('请先连接网关', 'error');
       return;

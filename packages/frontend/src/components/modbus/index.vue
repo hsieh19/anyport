@@ -7,6 +7,7 @@ import { useModbusActions } from './composables/useModbusActions';
 import ModbusHeader from './ModbusHeader.vue';
 import ModbusControl from './ModbusControl.vue';
 import ModbusMonitor from './ModbusMonitor.vue';
+import ModbusCollectionPanel from './ModbusCollectionPanel.vue';
 
 // 弹窗组件
 import ModbusProfilePicker from '../ModbusProfilePicker.vue';
@@ -21,7 +22,7 @@ const actions = useModbusActions(state, latestReadResults);
 </script>
 
 <template>
-  <div class="modbus-panel">
+  <div class="modbus-panel" :class="{ 'with-collection': state.isCollectionVisible.value }">
     <!-- 弹窗 -->
     <MqttConfigDialog v-model:show="state.showMqttDialog.value" />
     <GatewayManagerDialog v-model:show="state.showGatewayManager.value" />
@@ -38,6 +39,11 @@ const actions = useModbusActions(state, latestReadResults);
     <div class="panel-body">
       <!-- 命令控制区域 -->
       <ModbusControl :state="state" :actions="actions" />
+      
+      <!-- 持续采集区域 -->
+      <Transition name="fade-slide">
+        <ModbusCollectionPanel v-if="state.isCollectionVisible.value" :state="state" />
+      </Transition>
       
       <!-- 监控网格 (日志 & 结果) -->
       <ModbusMonitor :state="state" :actions="actions" />
@@ -158,4 +164,7 @@ const actions = useModbusActions(state, latestReadResults);
 .toast-enter-active, .toast-leave-active { transition: all 0.4s; }
 .toast-enter-from { opacity: 0; transform: translateX(50px); }
 .toast-leave-to { opacity: 0; transform: translateY(-20px); }
+
+.fade-slide-enter-active, .fade-slide-leave-active { transition: all 0.3s ease; }
+.fade-slide-enter-from, .fade-slide-leave-to { opacity: 0; transform: translateY(-10px); }
 </style>
