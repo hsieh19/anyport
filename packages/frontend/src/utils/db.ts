@@ -30,10 +30,20 @@ interface AnyPortDB extends DBSchema {
         };
         indexes: { 'by-timestamp': number; 'by-device': string; 'by-slave': number };
     };
+    firmware_cache: {
+        key: string; // version
+        value: {
+            version: string;
+            data: ArrayBuffer;
+            fileName: string;
+            hash: string;
+            updatedAt: number;
+        };
+    };
 }
 
 const DB_NAME = 'anyport-profiles';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 const dbPromise = openDB<AnyPortDB>(DB_NAME, DB_VERSION, {
     upgrade(db, oldVersion, _newVersion, transaction) {
@@ -53,6 +63,11 @@ const dbPromise = openDB<AnyPortDB>(DB_NAME, DB_VERSION, {
             const store = transaction.objectStore('history_data');
             if (!store.indexNames.contains('by-slave')) {
                 store.createIndex('by-slave', 'slaveAddr');
+            }
+        }
+        if (oldVersion < 4) {
+            if (!db.objectStoreNames.contains('firmware_cache')) {
+                db.createObjectStore('firmware_cache', { keyPath: 'version' });
             }
         }
     },
@@ -118,5 +133,17 @@ export const historyDb = {
             }
             await tx.done;
         }
+    }
+};
+
+export const firmwareDb = {
+    async get(version: string) {
+        return (await dbPromise).get('firmware_cache', version);
+    },
+    async save(entry: AnyPortDB['firmware_cache']['value']) {
+        return (await dbPromise).put('firmware_cache', entry);
+    },
+    async clearAll() {
+        return (await dbPromise).clear('firmware_cache');
     }
 };

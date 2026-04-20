@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import {  } from 'vue';
-
+import {} from "vue";
 
 interface Props {
   show: boolean;
@@ -9,7 +8,7 @@ interface Props {
 const props = defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:show', value: boolean): void;
+  (e: "update:show", value: boolean): void;
 }>();
 
 // 防止右键菜单和图片拖拽，增加基础防爬保护
@@ -17,45 +16,45 @@ const handleImageProtection = (e: Event) => {
   e.preventDefault();
 };
 
-const workerBase = 'https://update.anyport.one';
+const workerBase = "https://update.anyport.one";
 const rewardImgUrl = `${workerBase}/anyport/reward.png`;
 
 function handleDownload() {
   // 1. 先请求签名地址
   fetch(`${workerBase}/anyport/get-link?ver=bridge`)
-    .then(res => res.json())
-    .then(data => {
+    .then((res) => res.json())
+    .then((data) => {
       if (data.url) {
         // 2. 使用带签名的地址进行下载
-        window.open(data.url, '_blank');
+        window.open(data.url, "_blank");
       } else {
-        alert('获取下载链接失败，请稍后重试');
+        alert("获取下载链接失败，请稍后重试");
       }
     })
-    .catch(err => {
-      console.error('Download error:', err);
-      alert('网络错误，无法连接下载服务器');
+    .catch((err) => {
+      console.error("Download error:", err);
+      alert("网络错误，无法连接下载服务器");
     });
 }
 
 function handleClose() {
-  emit('update:show', false);
+  emit("update:show", false);
+}
+
+function openFlasher() {
+  window.open("?view=flasher", "_blank");
 }
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="fade">
-      <div
-        v-if="props.show"
-        class="sponsor-overlay"
-        @click.self="handleClose"
-      >
+      <div v-if="props.show" class="sponsor-overlay" @click.self="handleClose">
         <Transition name="zoom">
           <div v-if="props.show" class="sponsor-card">
             <header class="sponsor-header">
               <div class="title-group">
-                <h3>💖 支持作者 & 下载插件</h3>
+                <h3>💖 支持作者 & 工具下载</h3>
                 <p class="subtitle">感谢支持 Anyport 的开源开发</p>
               </div>
               <button class="btn-close" @click="handleClose">×</button>
@@ -64,26 +63,31 @@ function handleClose() {
             <section class="sponsor-body">
               <div class="qr-container">
                 <!-- 基础隐私保护：禁用右键、拖放、不发送 Referrer -->
-                <img 
+                <img
                   v-if="props.show"
-                  :src="rewardImgUrl" 
-                  alt="Reward Code" 
+                  :src="rewardImgUrl"
+                  alt="Reward Code"
                   class="reward-qr"
                   referrerpolicy="no-referrer"
                   @contextmenu="handleImageProtection"
                   @dragstart="handleImageProtection"
                 />
               </div>
-              
+
               <div class="sponsor-tips">
                 <p>您的每一份支持，都是我维护 Anyport 的动力。</p>
               </div>
             </section>
 
             <footer class="sponsor-footer">
-              <button class="btn-done" @click="handleDownload">
-                下载 anyport-bridge
-              </button>
+              <div class="footer-actions">
+                <button class="btn-done" @click="handleDownload">
+                  下载 anyport-bridge
+                </button>
+                <button class="btn-outline" @click="openFlasher">
+                  ESP32 固件烧录工具 ↗
+                </button>
+              </div>
             </footer>
           </div>
         </Transition>
@@ -109,7 +113,7 @@ function handleClose() {
   color: var(--color-text);
   border-radius: var(--radius-lg);
   width: 95%;
-  max-width: 440px;
+  max-width: 540px;
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--color-border);
   display: flex;
@@ -191,20 +195,28 @@ function handleClose() {
 
 .sponsor-footer {
   padding: 1rem 1.5rem 1.5rem;
-  display: flex;
-  justify-content: center;
 }
 
-.btn-done {
+.footer-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 1rem;
   width: 100%;
+}
+
+.btn-done, .btn-outline {
+  flex: 1;
   padding: 0.75rem;
-  background: var(--gradient-primary);
-  color: white;
-  border: none;
   border-radius: var(--radius-md);
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s;
+}
+
+.btn-done {
+  background: var(--gradient-primary);
+  color: white;
+  border: none;
 }
 
 .btn-done:hover {
@@ -212,12 +224,38 @@ function handleClose() {
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
 
-/* 动画效果 */
-.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
+.btn-outline {
+  background: transparent;
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+}
 
-.zoom-enter-active { transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
-.zoom-leave-active { transition: transform 0.2s ease-in; }
-.zoom-enter-from { transform: scale(0.85); opacity: 0; }
-.zoom-leave-to { transform: scale(0.95); opacity: 0; }
+.btn-outline:hover {
+  background: rgba(102, 126, 234, 0.08);
+}
+
+/* 动画效果 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.zoom-enter-active {
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.zoom-leave-active {
+  transition: transform 0.2s ease-in;
+}
+.zoom-enter-from {
+  transform: scale(0.85);
+  opacity: 0;
+}
+.zoom-leave-to {
+  transform: scale(0.95);
+  opacity: 0;
+}
 </style>

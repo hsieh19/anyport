@@ -1,31 +1,32 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { Coffee } from 'lucide-vue-next';
-import SponsorDialog from './SponsorDialog.vue';
+import { ref } from "vue";
+import { Coffee } from "lucide-vue-next";
+import SponsorDialog from "./SponsorDialog.vue";
 
 const emits = defineEmits<{
-  (e: 'change', value: string): void
+  (e: "change", value: string): void;
 }>();
 
 const appVersion = __APP_VERSION__;
-const activeTab = ref('modbus');
+// 读取 URL 参数以同步激活状态；对于被隐藏的视图（如 flasher），这会确保侧边栏没有任何菜单项处于虚假高亮状态
+const activeTab = ref(new URLSearchParams(window.location.search).get("view") || "modbus");
 const showSponsor = ref(false);
 
 const menuItems = [
-  { id: 'modbus', label: 'Modbus 调试', icon: '📡' },
-  { id: 'bacnet', label: 'BACnet 调试', icon: '🏢' },
-  { id: 'profiles', label: '点表库', icon: '📚' },
-  { id: 'dlt645', label: 'DL/T 645', icon: '⚡', disabled: true },
-  { id: 'mqtt', label: 'Remote (MQTT)', icon: '☁️', disabled: true },
-  { id: 'settings', label: '设置', icon: '⚙️', disabled: true },
+  { id: "modbus", label: "Modbus 调试", icon: "📡" },
+  { id: "bacnet", label: "BACnet 调试", icon: "🏢" },
+  { id: "profiles", label: "点表库", icon: "📚" },
+  { id: "dlt645", label: "DL/T 645", icon: "⚡", disabled: true },
+  { id: "mqtt", label: "Remote (MQTT)", icon: "☁️", disabled: true },
+  { id: "settings", label: "设置", icon: "⚙️", disabled: true },
 ];
 
 function selectTab(id: string) {
-  const item = menuItems.find(i => i.id === id);
+  const item = menuItems.find((i) => i.id === id);
   if (item?.disabled) return;
-  
+
   activeTab.value = id;
-  emits('change', id);
+  emits("change", id);
 }
 </script>
 
@@ -40,8 +41,8 @@ function selectTab(id: string) {
     </div>
 
     <nav class="sidebar-nav">
-      <div 
-        v-for="item in menuItems" 
+      <div
+        v-for="item in menuItems"
         :key="item.id"
         class="nav-item"
         :class="{ active: activeTab === item.id, disabled: item.disabled }"
@@ -56,7 +57,7 @@ function selectTab(id: string) {
     <div class="sidebar-footer">
       <button class="sponsor-trigger" @click="showSponsor = true">
         <Coffee :size="16" />
-        <span>支持作者&下载插件</span>
+        <span>支持作者&工具下载</span>
       </button>
       <p class="copyright">© 2026 Hotwon-CD2-Hsieh</p>
     </div>

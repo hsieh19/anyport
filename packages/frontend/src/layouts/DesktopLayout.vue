@@ -1,25 +1,34 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
-import { useDeviceStore } from '@/stores/deviceStore';
-import Sidebar from '@/components/Sidebar.vue';
-import ModbusPanel from '@/components/ModbusPanel.vue';
-import BacnetPanel from '@/components/BacnetPanel.vue';
-import ProfileLibraryView from '@/views/ProfileLibraryView.vue';
+import { ref, computed } from "vue";
+import { useDeviceStore } from "@/stores/deviceStore";
+import Sidebar from "@/components/Sidebar.vue";
+import ModbusPanel from "@/components/ModbusPanel.vue";
+import BacnetPanel from "@/components/BacnetPanel.vue";
+import ProfileLibraryView from "@/views/ProfileLibraryView.vue";
+import FirmwareFlasherView from "@/views/FirmwareFlasherView.vue";
 
-const currentView = ref('modbus');
+const currentView = ref(new URLSearchParams(window.location.search).get("view") || "modbus");
 
 function handleTabChange(id: string) {
   currentView.value = id;
+  // 若非通过弹窗新页面打开，可同步更新 URL 状态（可选，不强制刷新页面）
+  window.history.replaceState({}, "", `?view=${id}`);
 }
 
 const deviceStore = useDeviceStore();
 
 const pageTitle = computed(() => {
   switch (currentView.value) {
-    case 'modbus': return 'Modbus 调试';
-    case 'bacnet': return 'BACnet 调试';
-    case 'profiles': return '点表库管理';
-    default: return '控制台';
+    case "modbus":
+      return "Modbus 调试";
+    case "bacnet":
+      return "BACnet 调试";
+    case "profiles":
+      return "点表库管理";
+    case "flasher":
+      return "固件烧录工具";
+    default:
+      return "控制台";
   }
 });
 </script>
@@ -27,7 +36,7 @@ const pageTitle = computed(() => {
 <template>
   <div class="desktop-layout">
     <Sidebar @change="handleTabChange" />
-    
+
     <main class="main-content">
       <header class="content-header">
         <div class="header-left-col">
@@ -37,7 +46,7 @@ const pageTitle = computed(() => {
         </div>
 
         <!-- 报错徽章：在标题行（Header）正中央显示 -->
-        <div 
+        <div
           v-if="currentView === 'modbus' && deviceStore.modbusError"
           class="error-badge centered-header-badge"
           @click="deviceStore.modbusError = null"
@@ -57,6 +66,7 @@ const pageTitle = computed(() => {
             <ModbusPanel v-if="currentView === 'modbus'" />
             <BacnetPanel v-else-if="currentView === 'bacnet'" />
             <ProfileLibraryView v-else-if="currentView === 'profiles'" />
+            <FirmwareFlasherView v-else-if="currentView === 'flasher'" />
             <div v-else class="placeholder-view">
               <h3>功能开发中...</h3>
             </div>
@@ -139,8 +149,14 @@ const pageTitle = computed(() => {
 }
 
 @keyframes fadeInDown {
-  from { opacity: 0; transform: translate(-50%, -100%); }
-  to { opacity: 1; transform: translate(-50%, -50%); }
+  from {
+    opacity: 0;
+    transform: translate(-50%, -100%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
 }
 
 .content-body {

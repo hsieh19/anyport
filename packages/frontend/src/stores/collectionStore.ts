@@ -34,6 +34,7 @@ export const useCollectionStore = defineStore('collection', () => {
     const yAxisStep = ref(0.1); // Y轴步长（最小刻度间距）
     const sessionStartTime = ref<number | null>(null); // 本次轮询开始时间
     const slaveId = ref(1); 
+    const useBase1 = ref(false);
     const currentProfile = ref<any>(null); 
     const selectedChannels = ref<CollectionChannel[]>([]);
     const chartData = shallowRef<Record<string, DataPoint[]>>({}); 
@@ -175,7 +176,12 @@ export const useCollectionStore = defineStore('collection', () => {
         const channel = selectedChannels.value[currentChannelIndex];
         const fcList = normalizeFuncCodes(channel.func_code);
         const fc = fcList[0] || ModbusFunctionCode.READ_HOLDING_REGISTERS;
-        const physicalAddr = getModbusOffset(channel.addr, fc);
+        let physicalAddr = getModbusOffset(channel.addr, fc);
+        
+        // ✅ 核心修复：应用 Base 0/1 偏移逻辑
+        if (useBase1.value) {
+            physicalAddr = Math.max(0, physicalAddr - 1);
+        }
 
         pendingRequest = {
             slaveAddr: channel.slaveAddr, 
@@ -297,6 +303,7 @@ export const useCollectionStore = defineStore('collection', () => {
         yAxisStep,
         sessionStartTime,
         slaveId,
+        useBase1,
         currentProfile,
         selectedChannels,
         chartData,

@@ -36,6 +36,15 @@ watch(
   },
   { immediate: true },
 );
+
+// ✅ 监听寻址基准切换，即时同步
+watch(
+  () => props.state.useBase1.value,
+  (val) => {
+    collectionStore.useBase1 = val;
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
