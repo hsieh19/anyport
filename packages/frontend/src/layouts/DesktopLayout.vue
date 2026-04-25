@@ -2,8 +2,9 @@
 import { ref, computed } from "vue";
 import { useDeviceStore } from "@/stores/deviceStore";
 import Sidebar from "@/components/Sidebar.vue";
-import ModbusPanel from "@/components/ModbusPanel.vue";
+import ModbusPanel from "@/components/modbus/index.vue";
 import BacnetPanel from "@/components/BacnetPanel.vue";
+import RawSerialPanel from "@/components/raw/RawSerialPanel.vue";
 import ProfileLibraryView from "@/views/ProfileLibraryView.vue";
 import FirmwareFlasherView from "@/views/FirmwareFlasherView.vue";
 
@@ -21,6 +22,8 @@ const pageTitle = computed(() => {
   switch (currentView.value) {
     case "modbus":
       return "Modbus 调试";
+    case "raw232":
+      return "串口调试";
     case "bacnet":
       return "BACnet 调试";
     case "profiles":
@@ -49,7 +52,7 @@ const pageTitle = computed(() => {
         <div
           v-if="currentView === 'modbus' && deviceStore.modbusError"
           class="error-badge centered-header-badge"
-          @click="deviceStore.modbusError = null"
+          @click="deviceStore.clearModbusError()"
         >
           <span class="icon">❌</span>
           {{ deviceStore.modbusError }}
@@ -64,6 +67,7 @@ const pageTitle = computed(() => {
         <Transition name="fade" mode="out-in">
           <keep-alive>
             <ModbusPanel v-if="currentView === 'modbus'" />
+            <RawSerialPanel v-else-if="currentView === 'raw232'" />
             <BacnetPanel v-else-if="currentView === 'bacnet'" />
             <ProfileLibraryView v-else-if="currentView === 'profiles'" />
             <FirmwareFlasherView v-else-if="currentView === 'flasher'" />

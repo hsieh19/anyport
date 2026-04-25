@@ -5,6 +5,7 @@ import { MqttTransport } from '@/transports/MqttTransport';
 import { LocalBridgeTransport } from '@/transports/LocalBridgeTransport';
 import { ModbusRtuAdapter, ModbusTcpAdapter } from '@/protocols/modbus';
 import { BacnetMsTpAdapter, BacnetIpAdapter } from '@/protocols/bacnet';
+import { RawSerialAdapter } from '@/protocols/raw';
 import { ProtocolType, FrameCheckResult, type IProtocolAdapter } from '@shared/types/protocol.types';
 import { type ConnectionConfig as GlobalConnectionConfig, type ITransportAdapter } from '@shared/types/transport.types';
 import { bytesToHexSpaced } from '@/utils/hex';
@@ -62,6 +63,7 @@ export const useDeviceStore = defineStore('device', () => {
     const tcpAdapter = new ModbusTcpAdapter();
     const bacnetMsTpAdapter = new BacnetMsTpAdapter();
     const bacnetIpAdapter = new BacnetIpAdapter();
+    const rawSerialAdapter = new RawSerialAdapter();
     const adapter = ref<IProtocolAdapter<any, any>>(rtuAdapter);
 
     // 连接状态
@@ -87,6 +89,7 @@ export const useDeviceStore = defineStore('device', () => {
     // 分协议状态
     const modbusLogs = ref<LogEntry[]>([]);
     const bacnetLogs = ref<LogEntry[]>([]);
+    const rawLogs = ref<LogEntry[]>([]);
     const currentProtocol = ref<ProtocolType>(ProtocolType.MODBUS_RTU);
     const receiveBuffer = ref<Uint8Array>(new Uint8Array(0));
     const modbusMode = ref<ModbusMode>('rtu');
@@ -383,7 +386,7 @@ export const useDeviceStore = defineStore('device', () => {
 
         const frame = adapter.value.encode(command);
 
-        if (connectionType.value === 'mqtt' && mqttInstance && activeTransport === mqttInstance && !protocol.includes('bacnet')) {
+        if (connectionType.value === 'mqtt' && mqttInstance && activeTransport === mqttInstance && !protocol.includes('bacnet') && protocol !== ProtocolType.HEX_RAW) {
             const target = gatewayOptions.value;
             const payloadTarget = {
                 protocol: target.protocol,
@@ -409,11 +412,22 @@ export const useDeviceStore = defineStore('device', () => {
         return null;
     }
 
+    let rawTimeout: number | null = null;
     function handleData(data: Uint8Array): void {
         const newBuffer = new Uint8Array(receiveBuffer.value.length + data.length);
         newBuffer.set(receiveBuffer.value);
         newBuffer.set(data, receiveBuffer.value.length);
         receiveBuffer.value = newBuffer;
+
+        if (currentProtocol.value === ProtocolType.HEX_RAW) {
+            if (rawTimeout) window.clearTimeout(rawTimeout);
+            rawTimeout = window.setTimeout(() => {
+                const decoded = adapter.value.decode(receiveBuffer.value);
+                addLog('rx', receiveBuffer.value, decoded ?? undefined);
+                receiveBuffer.value = new Uint8Array(0);
+            }, 30);
+            return;
+        }
 
         const result = adapter.value.checkFrame(receiveBuffer.value);
         if (result === FrameCheckResult.COMPLETE) {
@@ -435,7 +449,7 @@ export const useDeviceStore = defineStore('device', () => {
             hex: bytesToHexSpaced(data),
             parsed
         };
-        const targetLogs = currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs;
+        const targetLogs = currentProtocol.value === ProtocolType.HEX_RAW ? rawLogs : (currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs);
         targetLogs.value.unshift(entry);
         if (targetLogs.value.length > 500) targetLogs.value.pop();
     }
@@ -447,6 +461,7 @@ export const useDeviceStore = defineStore('device', () => {
         else if (type === ProtocolType.MODBUS_TCP) adapter.value = tcpAdapter;
         else if (type === ProtocolType.BACNET_MSTP) adapter.value = bacnetMsTpAdapter;
         else if (type === ProtocolType.BACNET_IP) adapter.value = bacnetIpAdapter;
+        else if (type === ProtocolType.HEX_RAW) adapter.value = rawSerialAdapter;
     }
 
     function setModbusMode(mode: ModbusMode): void {
@@ -490,7 +505,14 @@ export const useDeviceStore = defineStore('device', () => {
             receiveBuffer.value = new Uint8Array(0);
         }
     }
-    function clearLogs() { if (currentProtocol.value.includes('bacnet')) bacnetLogs.value = []; else modbusLogs.value = []; }
+    function clearLogs() { 
+        if (currentProtocol.value === ProtocolType.HEX_RAW) rawLogs.value = [];
+        else if (currentProtocol.value.includes('bacnet')) bacnetLogs.value = []; 
+        else modbusLogs.value = []; 
+    }
+
+    function clearModbusError() { modbusError.value = null; }
+    function clearBacnetError() { bacnetError.value = null; }
 
 
     function handleError(err: any): void {
@@ -509,7 +531,7 @@ export const useDeviceStore = defineStore('device', () => {
             hex: 'ERROR: ' + translatedMsg,
             parsed: { success: false, error: translatedMsg }
         };
-        const targetLogs = currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs;
+        const targetLogs = currentProtocol.value === ProtocolType.HEX_RAW ? rawLogs : (currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs);
         targetLogs.value.unshift(entry);
         if (targetLogs.value.length > 500) targetLogs.value.pop();
 
@@ -654,11 +676,11 @@ export const useDeviceStore = defineStore('device', () => {
         isModbusConnected, isBacnetConnected, isModbusConnecting, isBacnetConnecting,
         isConnected, isConnecting, isMqttBrokerConnected, isMqttBrokerConnecting,
         modbusError, bacnetError, lastError,
-        modbusLogs, bacnetLogs, currentProtocol, modbusMode,
+        modbusLogs, bacnetLogs, rawLogs, currentProtocol, modbusMode,
         mqttConfig, connectionType, serialConfig, gatewayOptions, gateways,
         isSupported, connect, connectMqtt, connectMqttBroker,
         disconnect, disconnectGateway, disconnectBroker,
-        sendCommand, addLog, clearLogs,
+        sendCommand, addLog, clearLogs, clearModbusError, clearBacnetError,
         updateConfig, updateGatewayOptions, saveMqttConfig, setModbusMode, setProtocol, setConnectionType,
         isPinging, startPing, stopPing, removeGateway, clearOfflineGateways, probeBridge
     };

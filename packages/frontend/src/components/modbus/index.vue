@@ -4,7 +4,7 @@ import { useModbusState } from './composables/useModbusState';
 import { useModbusActions } from './composables/useModbusActions';
 
 // 子组件
-import ModbusHeader from './ModbusHeader.vue';
+import ConnectionHeader from '../shared/ConnectionHeader.vue';
 import ModbusControl from './ModbusControl.vue';
 import ModbusMonitor from './ModbusMonitor.vue';
 import ModbusCollectionPanel from './ModbusCollectionPanel.vue';
@@ -15,10 +15,52 @@ import MqttConfigDialog from '../MqttConfigDialog.vue';
 import GatewayManagerDialog from '../GatewayManagerDialog.vue';
 
 import { useModbusLogs } from './composables/useModbusLogs';
+import { useDeviceStore } from '@/stores/deviceStore';
 
 const state = useModbusState();
+const deviceStore = useDeviceStore();
 const { latestReadResults } = useModbusLogs(state);
 const actions = useModbusActions(state, latestReadResults);
+
+// --- 连接操作 (从原 ModbusHeader.vue 迁移) ---
+async function handleConnect() {
+  if (deviceStore.connectionType === 'mqtt') {
+    const opts = deviceStore.mqttConfig;
+    if (!opts.brokerUrl || !opts.topicPrefix || !opts.siteId || !opts.gatewayId) {
+      actions.showToast('请填写完整的 MQTT 配置信息', 'error');
+      return;
+    }
+    await deviceStore.connectMqtt();
+    return;
+  }
+  await deviceStore.connect();
+}
+
+async function handleDisconnect() {
+  if (deviceStore.connectionType === 'mqtt') {
+    await deviceStore.disconnectGateway();
+  } else {
+    await deviceStore.disconnect();
+  }
+}
+
+// --- Ping 操作 (从原 ModbusHeader.vue 迁移) ---
+function togglePing() {
+  if (deviceStore.isPinging) {
+    deviceStore.stopPing();
+  } else {
+    deviceStore.startPing();
+  }
+}
+
+async function probeLocalTcp() {
+  const target = deviceStore.gatewayOptions.tcpTarget;
+  try {
+    await deviceStore.probeBridge(target.ip, target.port);
+  } catch (err: any) {
+    actions.showToast(err.message, 'error');
+  }
+}
 </script>
 
 <template>
@@ -33,7 +75,58 @@ const actions = useModbusActions(state, latestReadResults);
     />
 
     <!-- 顶部连接配置 -->
-    <ModbusHeader :state="state" :actions="actions" />
+    <ConnectionHeader
+      :is-connected="deviceStore.isModbusConnected"
+      :is-connecting="deviceStore.isModbusConnecting"
+      :connection-type="deviceStore.connectionType"
+      :serial-config="deviceStore.serialConfig"
+      :mqtt-config="deviceStore.mqttConfig"
+      :gateway-options="deviceStore.gatewayOptions"
+      :gateways="deviceStore.gateways"
+      :modbus-mode="deviceStore.modbusMode"
+      :is-mqtt-broker-connected="deviceStore.isMqttBrokerConnected"
+      :is-mqtt-broker-connecting="deviceStore.isMqttBrokerConnecting"
+      :is-supported="deviceStore.isSupported"
+      :show-broker-control="true"
+      connect-btn-label="连接网关"
+      @connect="handleConnect"
+      @disconnect="handleDisconnect"
+      @connect-broker="deviceStore.connectMqttBroker()"
+      @disconnect-broker="deviceStore.disconnectBroker()"
+      @open-mqtt-config="state.showMqttDialog.value = true"
+      @open-gateway-manager="state.showGatewayManager.value = true"
+      @update:connection-type="deviceStore.setConnectionType"
+      @update:serial-config="deviceStore.updateConfig"
+      @update:gateway-options="deviceStore.updateGatewayOptions"
+      @change-modbus-mode="deviceStore.setModbusMode"
+      @select-gateway="(id) => {
+        const parts = id.split('/');
+        if (parts.length === 2) deviceStore.saveMqttConfig({ siteId: parts[0], gatewayId: parts[1] });
+      }"
+    >
+      <!-- Ping 按钮通过 #extra-actions slot 注入 -->
+      <template #extra-actions>
+        <!-- 本地 TCP Ping -->
+        <button
+          v-if="deviceStore.connectionType !== 'mqtt' && deviceStore.modbusMode === 'tcp' && deviceStore.isModbusConnected"
+          class="btn-ping"
+          style="margin-left: 8px; height: 32px;"
+          @click="probeLocalTcp"
+        >
+          📡 Ping
+        </button>
+
+        <!-- MQTT TCP Ping -->
+        <button
+          v-if="deviceStore.isModbusConnected && deviceStore.connectionType === 'mqtt' && deviceStore.gatewayOptions.protocol === 'tcp'"
+          class="btn-ping"
+          :class="{ pinging: deviceStore.isPinging }"
+          @click="togglePing"
+        >
+          {{ deviceStore.isPinging ? '🔴 Stop' : '📡 Ping' }}
+        </button>
+      </template>
+    </ConnectionHeader>
 
     <!-- 主体 -->
     <div class="panel-body">
