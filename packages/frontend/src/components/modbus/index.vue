@@ -10,9 +10,9 @@ import ModbusMonitor from './ModbusMonitor.vue';
 import ModbusCollectionPanel from './ModbusCollectionPanel.vue';
 
 // 弹窗组件
-import ModbusProfilePicker from '../ModbusProfilePicker.vue';
-import MqttConfigDialog from '../MqttConfigDialog.vue';
-import GatewayManagerDialog from '../GatewayManagerDialog.vue';
+import ModbusProfilePicker from './ModbusProfilePicker.vue';
+import MqttConfigDialog from '../shared/MqttConfigDialog.vue';
+import GatewayManagerDialog from '../shared/GatewayManagerDialog.vue';
 
 import { useModbusLogs } from './composables/useModbusLogs';
 import { useDeviceStore } from '@/stores/deviceStore';

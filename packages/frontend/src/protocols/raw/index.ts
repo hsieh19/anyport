@@ -1,1 +1,1 @@
-export * from './RawSerialAdapter';
+export { RawSerialAdapter } from './RawSerialAdapter';

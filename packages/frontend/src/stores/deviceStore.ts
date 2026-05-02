@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, shallowRef, computed, watch, onMounted } from 'vue';
+import { ref, shallowRef, computed, watch } from 'vue';
 import { WebSerialTransport } from '@/transports/WebSerialTransport';
 import { MqttTransport } from '@/transports/MqttTransport';
 import { LocalBridgeTransport } from '@/transports/LocalBridgeTransport';
@@ -7,7 +7,7 @@ import { ModbusRtuAdapter, ModbusTcpAdapter } from '@/protocols/modbus';
 import { BacnetMsTpAdapter, BacnetIpAdapter } from '@/protocols/bacnet';
 import { RawSerialAdapter } from '@/protocols/raw';
 import { ProtocolType, FrameCheckResult, type IProtocolAdapter } from '@shared/types/protocol.types';
-import { type ConnectionConfig as GlobalConnectionConfig, type ITransportAdapter } from '@shared/types/transport.types';
+import { type ConnectionConfig as GlobalConnectionConfig, type ITransportAdapter, type IMqttTransport, type GatewayStatusInfo } from '@shared/types/transport.types';
 import { bytesToHexSpaced } from '@/utils/hex';
 import { translateCommError } from '@/utils/errorTranslator';
 
@@ -53,11 +53,32 @@ export interface GatewayConfig {
     rtuTarget: { baudRate: number; dataBits: number; stopBits: number; parity: string };
 }
 
+/** [R1] 网关实例的运行时状态（在 Store 中维护的展示对象） */
+export interface GatewayInfo {
+    /** `${siteId}/${gatewayId}` 拼接而成的唯一标识 */
+    id: string;
+    siteId: string;
+    gatewayId: string;
+    online: boolean;
+    /** Unix 毫秒时间戳（来自 MQTT Status 报文） */
+    timestamp: number;
+    /** 最近一次心跳时间 */
+    lastSeen: number;
+    config?: {
+        version?: string;
+        baud?: number;
+        parity?: string;
+        stopBits?: number;
+        ethIp?: string;
+        wifiIp?: string;
+    };
+}
+
 // --- Store 定义 ---
 export const useDeviceStore = defineStore('device', () => {
     // 状态
     const transport = shallowRef<WebSerialTransport | null>(null);
-    const mqttTransport = shallowRef<MqttTransport | null>(null);
+    const mqttTransport = shallowRef<IMqttTransport | null>(null);
     const bridgeTransport = shallowRef<LocalBridgeTransport | null>(null);
     const rtuAdapter = new ModbusRtuAdapter();
     const tcpAdapter = new ModbusTcpAdapter();
@@ -114,7 +135,10 @@ export const useDeviceStore = defineStore('device', () => {
     const mqttConfig = ref<MqttConfig>(initialMqttConfig);
 
     watch(mqttConfig, (newVal) => {
-        localStorage.setItem('anyport_mqtt_config', JSON.stringify(newVal));
+        // [修复3.5] 排除 password 字段，防止 XSS 通过 localStorage 窃取凭据
+        // 密码仅保留在会话内存中，页面刷新后需重新输入
+        const { password: _omit, ...configToSave } = newVal;
+        localStorage.setItem('anyport_mqtt_config', JSON.stringify(configToSave));
     }, { deep: true });
 
     // 独立的连接类型
@@ -144,19 +168,17 @@ export const useDeviceStore = defineStore('device', () => {
         tcpTarget: { ip: '192.168.1.5', port: 502 },
         rtuTarget: { baudRate: 9600, dataBits: 8, stopBits: 1, parity: 'none' }
     });
-    const gateways = ref<any[]>([]);
+    const gateways = ref<GatewayInfo[]>([]);
 
     // --- Watchers ---
 
-    // 初始化传输层
-    onMounted(() => {
-        if (typeof window !== 'undefined') {
-            transport.value = new WebSerialTransport();
-            transport.value.onData(handleData);
-            transport.value.onStateChange(handleSerialStateChange);
-            transport.value.onError(handleError);
-        }
-    });
+    // [修复2.1] 直接在 Store setup 中初始化，避免 onMounted 在组件外调用时不执行的风险
+    if (typeof window !== 'undefined') {
+        transport.value = new WebSerialTransport();
+        transport.value.onData(handleData);
+        transport.value.onStateChange(handleSerialStateChange);
+        transport.value.onError(handleError);
+    }
 
     function handleSerialStateChange(state: boolean): void {
         const connectedRef = currentProtocol.value.includes('bacnet') ? isBacnetConnected : isModbusConnected;
@@ -203,8 +225,8 @@ export const useDeviceStore = defineStore('device', () => {
                 }
             };
             await mqttTransport.value.connect(config);
-            if ((mqttTransport.value as any).onGatewayStatus) {
-                (mqttTransport.value as any).onGatewayStatus((info: any) => {
+            if (mqttTransport.value.onGatewayStatus) {
+                mqttTransport.value.onGatewayStatus((info: GatewayStatusInfo) => {
                     const existing = gateways.value.find(g => g.siteId === info.siteId && g.gatewayId === info.gatewayId);
                     if (existing) {
                         existing.online = info.online;
@@ -219,12 +241,12 @@ export const useDeviceStore = defineStore('device', () => {
                     }
                 });
             }
-            if ((mqttTransport.value as any).onPingResult) {
-                (mqttTransport.value as any).onPingResult(handlePingResult);
+            if (mqttTransport.value.onPingResult) {
+                mqttTransport.value.onPingResult(handlePingResult);
             }
             startGatewayHeartbeatMonitor();
-            if ((mqttTransport.value as any).startDiscovery) {
-                await (mqttTransport.value as any).startDiscovery();
+            if (mqttTransport.value.startDiscovery) {
+                await mqttTransport.value.startDiscovery();
             }
         } catch (error: any) {
             handleError(error);
@@ -247,8 +269,10 @@ export const useDeviceStore = defineStore('device', () => {
             if (!mqttTransport.value || !isMqttBrokerConnected.value) {
                 await connectMqttBroker();
             }
-            if ((mqttTransport.value as any).selectGateway) {
-                await (mqttTransport.value as any).selectGateway(mqttConfig.value.siteId, mqttConfig.value.gatewayId);
+            // connectMqttBroker() 中已赋值 mqttTransport.value，提取非空引用供 TS 推断
+            const mqtt = mqttTransport.value;
+            if (mqtt?.selectGateway) {
+                await mqtt.selectGateway(mqttConfig.value.siteId, mqttConfig.value.gatewayId);
             }
             connectedRef.value = true;
             // 记录用户的主动连接意图
@@ -311,6 +335,12 @@ export const useDeviceStore = defineStore('device', () => {
     }
 
     async function disconnect(): Promise<void> {
+        // [修复1.1] 清除 rawTimeout，防止断开后 Timer 仍触发旧数据回调
+        if (rawTimeout !== null) {
+            window.clearTimeout(rawTimeout);
+            rawTimeout = null;
+        }
+
         const connectedRef = currentProtocol.value.includes('bacnet') ? isBacnetConnected : isModbusConnected;
 
         try {
@@ -403,7 +433,7 @@ export const useDeviceStore = defineStore('device', () => {
             };
 
 
-            await (mqttInstance as any).sendWithTarget(frame, payloadTarget);
+            await mqttInstance.sendWithTarget(frame, payloadTarget);
         } else {
             await activeTransport.send(frame);
         }
@@ -440,22 +470,40 @@ export const useDeviceStore = defineStore('device', () => {
         }
     }
 
+    /** [R2] 私有辅助函数：将日志条目写入对应协议的日志队列，并维持 500 条上限。
+     * 是 addLog 和 handleError 共用的底层操作，消除两处重复逻辑。
+     * @param entry 已构建完成的日志条目
+     * @param forceProtocol 可选，强制指定写入哪个协议的日志（如不传则使用当前协议）
+     */
+    function _appendLog(entry: LogEntry, forceProtocol?: ProtocolType): void {
+        const proto = forceProtocol ?? currentProtocol.value;
+        const targetLogs = proto === ProtocolType.HEX_RAW ? rawLogs
+            : (proto.includes('bacnet') ? bacnetLogs : modbusLogs);
+        targetLogs.value.unshift(entry);
+        if (targetLogs.value.length > 500) targetLogs.value.pop();
+    }
+
     function addLog(direction: 'tx' | 'rx', data: Uint8Array, parsed?: any): void {
-        const entry: LogEntry = {
+        _appendLog({
             id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
             timestamp: new Date(),
             direction,
             data: new Uint8Array(data),
             hex: bytesToHexSpaced(data),
             parsed
-        };
-        const targetLogs = currentProtocol.value === ProtocolType.HEX_RAW ? rawLogs : (currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs);
-        targetLogs.value.unshift(entry);
-        if (targetLogs.value.length > 500) targetLogs.value.pop();
+        });
     }
 
 
     function setProtocol(type: ProtocolType): void {
+        // [修复1.1] 清除 rawTimeout，防止旧协议 Timer 在切换后仍触发
+        if (rawTimeout !== null) {
+            window.clearTimeout(rawTimeout);
+            rawTimeout = null;
+        }
+        // [修复1.2] 清空 receiveBuffer，防止旧协议的半包数据污染新协议的解析
+        receiveBuffer.value = new Uint8Array(0);
+
         currentProtocol.value = type;
         if (type === ProtocolType.MODBUS_RTU) adapter.value = rtuAdapter;
         else if (type === ProtocolType.MODBUS_TCP) adapter.value = tcpAdapter;
@@ -518,22 +566,19 @@ export const useDeviceStore = defineStore('device', () => {
     function handleError(err: any): void {
         const rawMsg = typeof err === 'string' ? err : (err.message || String(err));
         const translatedMsg = translateCommError(rawMsg);
-        
+
         const errorRef = currentProtocol.value.includes('bacnet') ? bacnetError : modbusError;
         errorRef.value = translatedMsg;
 
-        // 将错误记录入通信日志
-        const entry: LogEntry = {
+        // [R2] 复用 _appendLog，消除手动构建 LogEntry 的重复逻辑
+        _appendLog({
             id: 'err-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
             timestamp: new Date(),
             direction: 'rx',
             data: new Uint8Array(0),
             hex: 'ERROR: ' + translatedMsg,
             parsed: { success: false, error: translatedMsg }
-        };
-        const targetLogs = currentProtocol.value === ProtocolType.HEX_RAW ? rawLogs : (currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs);
-        targetLogs.value.unshift(entry);
-        if (targetLogs.value.length > 500) targetLogs.value.pop();
+        });
 
         console.error('通信错误:', rawMsg);
     }
@@ -583,7 +628,7 @@ export const useDeviceStore = defineStore('device', () => {
                 stopPing();
                 return;
             }
-            (mqttTransport.value as any).sendPing(targetIp, targetPort, pingSeq++).catch((err: any) => {
+            mqttTransport.value.sendPing(targetIp, targetPort, pingSeq++).catch((err: unknown) => {
                 console.error('Ping send error:', err);
             });
         };

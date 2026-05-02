@@ -201,7 +201,7 @@ const tcpEndpoint = computed({
             >
               <span>远程MQTT</span>
               <span
-                class="ml-1 cursor-pointer"
+                class="ch-settings-icon"
                 @click.stop="
                   emit('update:connectionType', 'mqtt');
                   emit('open-mqtt-config');
@@ -307,7 +307,7 @@ const tcpEndpoint = computed({
                     :value="gatewayOptions.rtuTarget.baudRate"
                     @change="(e) => emit('update:gatewayOptions', { rtuTarget: { ...gatewayOptions.rtuTarget, baudRate: Number((e.target as HTMLSelectElement).value) } })"
                     :disabled="isConnected"
-                    class="w-28"
+                    class="ch-baud-select"
                   >
                     <option v-for="rate in baudRateOptions" :key="rate" :value="rate">
                       {{ rate }} bps
@@ -318,7 +318,7 @@ const tcpEndpoint = computed({
                     :value="gatewayOptions.rtuTarget.dataBits"
                     @change="(e) => emit('update:gatewayOptions', { rtuTarget: { ...gatewayOptions.rtuTarget, dataBits: Number((e.target as HTMLSelectElement).value) } })"
                     :disabled="isConnected"
-                    class="w-20"
+                    class="ch-sm-select"
                   >
                     <option :value="7">7 数据位</option>
                     <option :value="8">8 数据位</option>
@@ -328,7 +328,7 @@ const tcpEndpoint = computed({
                     :value="gatewayOptions.rtuTarget.stopBits"
                     @change="(e) => emit('update:gatewayOptions', { rtuTarget: { ...gatewayOptions.rtuTarget, stopBits: Number((e.target as HTMLSelectElement).value) } })"
                     :disabled="isConnected"
-                    class="w-24"
+                    class="ch-sm-select"
                   >
                     <option :value="1">1 停止位</option>
                     <option :value="2">2 停止位</option>
@@ -338,7 +338,7 @@ const tcpEndpoint = computed({
                     :value="gatewayOptions.rtuTarget.parity"
                     @change="(e) => emit('update:gatewayOptions', { rtuTarget: { ...gatewayOptions.rtuTarget, parity: (e.target as HTMLSelectElement).value as any } })"
                     :disabled="isConnected"
-                    class="w-24"
+                    class="ch-sm-select"
                   >
                     <option value="none">无校验</option>
                     <option value="even">偶校验</option>
@@ -455,7 +455,7 @@ const tcpEndpoint = computed({
               v-if="connectionType !== 'mqtt' && modbusMode === 'tcp' && !hideProtocolSwitch"
               class="help-icon ch-help-icon-wrap"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; display: inline-block; vertical-align: middle;" class="info-svg text-gray-400 hover:text-indigo-500 cursor-help transition-colors">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px; display: inline-block; vertical-align: middle;" class="info-svg ch-info-icon">
                 <circle cx="12" cy="12" r="10"></circle>
                 <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
                 <line x1="12" y1="17" x2="12.01" y2="17"></line>

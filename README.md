@@ -4,7 +4,7 @@
 
 ## ✨ 特性
 
-- **多协议支持**：目前支持 Modbus RTU，内置 Modbus TCP 解析能力，计划支持 DL/T645 等。
+- **多协议支持**：完整支持 Modbus RTU/TCP、BACnet IP/MSTP 以及通用串口透传 (Raw Serial) 协议。
 - **现代化 UI**：基于 Vue 3 和全新设计语言，支持暗色模式。
 - **响应式设计**：
     - **桌面端**：专业分栏布局，大屏操作更高效。
@@ -39,8 +39,7 @@ Anyport 的架构设计预留了完整的扩展能力，第二期开发将聚焦
 
 - [ ] **更多工业协议**
     - **DL/T 645**: 电力行业标准规约。
-    - **BACnet MS/TP**: 楼宇自控协议。
-    - **RS232/RS485 Hex**: 通用透传调试模式。
+    - **M-Bus**: 远程抄表标准协议。
 - [ ] **云端能力**
     - **云端日志**: 将本地 IndexDB 日志同步至云端存储。
     - **设备孪生**: 实时状态映射。
@@ -76,12 +75,12 @@ anyport/
 │   └── frontend/               # Vue 3 前端应用
 │       └── src/
 │           ├── transports/     # 物理传输层：负责底层字节流收发 (WebSerial, MQTT)
-│           ├── protocols/      # 协议编解码层：实现不同工业协议的封装与解析 (Modbus, DL/T 645)
+│           ├── protocols/      # 协议编解码层：实现不同工业协议的封装与解析 (Modbus, BACnet, Raw)
 │           ├── services/       # 业务逻辑服务：处理配置存取、复杂数据过滤等逻辑
 │           ├── stores/         # 状态管理 (Pinia)：维护全局设备连接状态、读取的数据快照
 │           ├── views/          # 页面视图：轮廓库管理页面、移动端专用视图
 │           ├── layouts/        # 分端布局：Desktop (分栏) 与 Mobile (标签页) 布局骨架
-│           ├── components/     # UI 业务组件：协议配置面板、实时通讯日志盒
+│           ├── components/     # UI 业务组件：按协议划分子目录 (modbus, bacnet, raw, shared)
 │           ├── utils/          # 工具函数：IndexedDB (Dexie) 初始化、CRC 校验等
 │           ├── types/          # 前端 TypeScript 类型定义
 │           └── assets/         # 静态资源 (图标、样式变量、主字体)

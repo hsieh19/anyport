@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, shallowRef, watch } from 'vue';
+import { ref, shallowRef, triggerRef, watch } from 'vue';
 import { useDeviceStore } from './deviceStore';
 import { historyDb } from '@/utils/db';
 import { parseAutoValue, normalizeFuncCodes, getModbusOffset, ModbusFunctionCode } from '@/protocols/modbus';
@@ -270,10 +270,9 @@ export const useCollectionStore = defineStore('collection', () => {
         const newPoints = [...currentPoints, { timestamp, value: numericValue }];
         if (newPoints.length > 500) newPoints.shift();
         
-        chartData.value = {
-            ...chartData.value,
-            [channel.id]: newPoints
-        };
+        // [修复3.2] 直接原地修改 + triggerRef，避免通道数量多时展开整个对象的性能开销
+        chartData.value[channel.id] = newPoints;
+        triggerRef(chartData);
 
         pendingDataBuffer.push({
             timestamp,

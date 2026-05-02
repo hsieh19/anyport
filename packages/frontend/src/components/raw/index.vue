@@ -3,8 +3,8 @@ import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue';
 import { useDeviceStore } from '@/stores/deviceStore';
 import { ProtocolType } from '@shared/types/protocol.types';
 import ConnectionHeader from '../shared/ConnectionHeader.vue';
-import MqttConfigDialog from '../MqttConfigDialog.vue';
-import GatewayManagerDialog from '../GatewayManagerDialog.vue';
+import MqttConfigDialog from '../shared/MqttConfigDialog.vue';
+import GatewayManagerDialog from '../shared/GatewayManagerDialog.vue';
 
 const deviceStore = useDeviceStore();
 const showMqttDialog = ref(false);

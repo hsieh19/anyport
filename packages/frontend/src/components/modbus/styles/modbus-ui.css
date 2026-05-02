@@ -11,12 +11,7 @@
   overflow-y: auto;
 }
 
-.panel-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  flex: 1 0 auto;
-}
+/* [修复1.3] 已移除此处 .panel-body 旧定义（flex: 1 0 auto），保留 L149 处含 min-height:0 的正确版本 */
 
 .panel-body > * {
   flex-shrink: 0; /* 禁止子板块被挤压 */
@@ -463,13 +458,7 @@
   font-size: 0.9rem;
 }
 
-.tooltip-item {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.8rem;
-  gap: 1rem;
-  line-height: 1.8;
-}
+/* [修复1.3] 已移除此处 .tooltip-item 旧定义（缺少 align-items 和 border-bottom），保留 L527 处完整版本 */
 
 .tooltip-item .p-name {
   color: var(--color-text-secondary);

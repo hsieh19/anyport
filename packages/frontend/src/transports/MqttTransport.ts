@@ -2,28 +2,24 @@ import mqtt, { type MqttClient, type IClientOptions } from 'mqtt';
 import {
   TransportType,
   type ConnectionConfig,
-  type ITransportAdapter
+  type IMqttTransport,
+  type SendWithTargetPayload,
+  type GatewayStatusInfo
 } from '@shared/types/transport.types';
 import { bytesToHexCompact, hexToBytes } from '@/utils/hex';
 
-export class MqttTransport implements ITransportAdapter {
+export class MqttTransport implements IMqttTransport {
   readonly type = TransportType.MQTT;
 
   private client: MqttClient | null = null;
   private _isConnected = false;
+  // [修复3.1] 复用单一 TextDecoder 实例，避免高频消息处理路径上重复实例化
+  private readonly decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
 
   private dataCallback: ((data: Uint8Array) => void) | null = null;
   private errorCallback: ((error: Error) => void) | null = null;
   private stateChangeCallback: ((connected: boolean) => void) | null = null;
-  private gatewayStatusCallback:
-    | ((info: {
-      siteId: string;
-      gatewayId: string;
-      online: boolean;
-      timestamp: number;
-      config?: { version?: string; baud?: number; parity?: string; stopBits?: number; ethIp?: string; wifiIp?: string };
-    }) => void)
-    | null = null;
+  private gatewayStatusCallback: ((info: GatewayStatusInfo) => void) | null = null;
 
   private currentConfig: ConnectionConfig | null = null;
   private currentSessionId: string | null = null;
@@ -238,33 +234,12 @@ export class MqttTransport implements ITransportAdapter {
       data: Array.from(data)
     };
 
-    const json = JSON.stringify(payload);
-
-    await new Promise<void>((resolve, reject) => {
-      this.client!.publish(topic, json, { qos: 1 }, (err?: Error) => {
-        if (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          this.errorCallback?.(error);
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
+    await this._publish(topic, JSON.stringify(payload));
   }
 
   async sendWithTarget(
     data: Uint8Array,
-    target: {
-      protocol: 'tcp' | 'rtu';
-      tcpTarget: { ip: string; port: number };
-      rtuTarget: {
-        baudRate: number;
-        dataBits: 8;
-        stopBits: 1 | 2;
-        parity: 'none' | 'even' | 'odd';
-      };
-    }
+    target: SendWithTargetPayload
   ): Promise<void> {
     if (!this.client || !this.currentConfig || !this.currentConfig.mqtt) {
       throw new Error('MQTT 未连接或缺少配置');
@@ -306,19 +281,7 @@ export class MqttTransport implements ITransportAdapter {
           payloadHex: hex
         };
 
-    const json = JSON.stringify(payload);
-
-    await new Promise<void>((resolve, reject) => {
-      this.client!.publish(topic, json, { qos: 1 }, (err?: Error) => {
-        if (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          this.errorCallback?.(error);
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
+    await this._publish(topic, JSON.stringify(payload));
   }
 
   onData(callback: (data: Uint8Array) => void): void {
@@ -434,7 +397,7 @@ export class MqttTransport implements ITransportAdapter {
   }
 
 
-  onPingResult(callback: (result: Record<string, any>) => void): void {
+  onPingResult(callback: (result: Record<string, unknown>) => void): void {
     this.pingCallback = callback;
   }
 
@@ -460,9 +423,12 @@ export class MqttTransport implements ITransportAdapter {
       seq
     };
 
-    const json = JSON.stringify(payload);
+    await this._publish(topic, JSON.stringify(payload));
+  }
 
-    await new Promise<void>((resolve, reject) => {
+  /** [修复2.3] 提取的私有 publish 方法，消除 send/sendWithTarget/sendPing 的重复逻辑 */
+  private _publish(topic: string, json: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       this.client!.publish(topic, json, { qos: 1 }, (err?: Error) => {
         if (err) {
           const error = err instanceof Error ? err : new Error(String(err));
@@ -476,8 +442,8 @@ export class MqttTransport implements ITransportAdapter {
   }
 
   private payloadToString(payload: Uint8Array): string {
-    if (typeof TextDecoder !== 'undefined') {
-      return new TextDecoder().decode(payload);
+    if (this.decoder) {
+      return this.decoder.decode(payload);
     }
     let result = '';
     for (let i = 0; i < payload.length; i++) {

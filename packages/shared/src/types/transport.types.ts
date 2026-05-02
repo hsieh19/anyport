@@ -69,3 +69,42 @@ export type MqttStatusPayload = 'online' | 'offline';
 export type MqttRequestPayload = ModbusRequest;
 
 export type MqttResponsePayload = ModbusResponse;
+
+// --- [修复2.2] MqttTransport 扩展接口 ---
+// 将 MqttTransport 的专属方法正式纳入类型系统，消除 deviceStore 中的 as any 断言
+
+export interface GatewayStatusInfo {
+    siteId: string;
+    gatewayId: string;
+    online: boolean;
+    timestamp: number;
+    config?: {
+        version?: string;
+        baud?: number;
+        parity?: string;
+        stopBits?: number;
+        ethIp?: string;
+        wifiIp?: string;
+    };
+}
+
+export interface SendWithTargetPayload {
+    protocol: 'tcp' | 'rtu';
+    tcpTarget: { ip: string; port: number };
+    rtuTarget: {
+        baudRate: number;
+        dataBits: number;
+        stopBits: number;
+        parity: string;
+    };
+}
+
+/** MqttTransport 专属扩展接口（超出 ITransportAdapter 的方法） */
+export interface IMqttTransport extends ITransportAdapter {
+    onGatewayStatus(callback: (info: GatewayStatusInfo) => void): void;
+    onPingResult(callback: (result: Record<string, unknown>) => void): void;
+    selectGateway(siteId: string, gatewayId: string): Promise<void>;
+    startDiscovery(): Promise<void>;
+    sendWithTarget(data: Uint8Array, target: SendWithTargetPayload): Promise<void>;
+    sendPing(ip: string, port: number, seq: number): Promise<void>;
+}

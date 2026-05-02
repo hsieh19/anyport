@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.2.0] - 2026-05-02
+
+### Added
+
+- **BACnet 调试架构深度重构**:
+  - 将原本 33KB 的巨型单文件 `BacnetPanel.vue` 拆分为 `BacnetDeviceExplorer`（设备浏览器）和 `BacnetLogView`（通信日志）等独立组件。
+  - 引入了基于 `defineExpose` 和 `templateRef` 的父子组件通信机制，实现了业务逻辑与 UI 布局的深度解耦。
+- **前端目录结构标准化**:
+  - 建立了以协议为核心的组件管理体系：所有 BACnet、Modbus、Raw 协议组件均已归入各自的子目录。
+  - 规范了入口文件命名，统一使用 `index.vue` 作为协议主面板。
+  - 清理了 `components/` 根目录，将业务对话框（网关管理、MQTT 配置）移至 `shared/` 共享目录。
+
+### Changed
+
+- **性能与效率优化**:
+  - **MQTT 传输优化**: 在 `MqttTransport` 中引入了 `TextDecoder` 实例复用机制，显著降低了高频报文流动时的 GC 压力。
+  - **响应式性能提升**: 优化了 `collectionStore` 的数据更新模式，在大批量点位轮询场景下降低了 Vue 响应式系统的计算开销。
+  - **日志逻辑去重**: 在 `deviceStore` 中提取了统一的日志追加辅助函数，消除了 Modbus 与 BACnet 协议间冗余的日志上限控制代码。
+- **安全性与类型安全增强**:
+  - **隐私保护**: 禁用了 MQTT 密码在 `localStorage` 中的持久化存储，有效防止敏感信息泄露。
+  - **严格类型化**: 引入了 `GatewayInfo` 等核心业务接口，大幅减少了 `gateways` 等关键状态在 Store 中的 `any` 类型使用。
+
+### Fixed
+
+- **模块解析修复**: 修复了由于 `protocols/raw/index.ts` 缺失导致的某些环境下模块路径别名解析失败的问题。
+- **UI 布局校准**: 修复了组件拆分过程中意外导致的 BACnet 工具栏错位问题，恢复了简洁的单行操作体验。
+
 ## [1.1.1] - 2026-04-25
 
 ### Added

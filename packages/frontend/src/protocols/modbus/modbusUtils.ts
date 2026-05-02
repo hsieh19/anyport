@@ -23,7 +23,6 @@ export function normalizeFuncCodes(input: any): number[] {
  * 将 PLC 地址 (如 40600) 转换为协议物理偏移量 (如 599)
  * @param addr 原始地址 (可以是 40001 这种 PLC 地址，也可以是 0 这种逻辑偏移)
  * @param _fc 功能码 (预留，用于某些复杂的地址归一化场景)
- * @param base1 是否为 1 开启基准（如果是 PLC 模式地址 1，协议层应发送 0）
  */
 export function getModbusOffset(addr: number | string, _fc: number | string): number {
   const numAddr = typeof addr === 'string' ? parseInt(addr, 10) : addr;

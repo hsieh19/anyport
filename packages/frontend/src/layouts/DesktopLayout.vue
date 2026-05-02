@@ -3,8 +3,8 @@ import { ref, computed } from "vue";
 import { useDeviceStore } from "@/stores/deviceStore";
 import Sidebar from "@/components/Sidebar.vue";
 import ModbusPanel from "@/components/modbus/index.vue";
-import BacnetPanel from "@/components/BacnetPanel.vue";
-import RawSerialPanel from "@/components/raw/RawSerialPanel.vue";
+import BacnetPanel from "@/components/bacnet/index.vue";
+import RawSerialPanel from "@/components/raw/index.vue";
 import ProfileLibraryView from "@/views/ProfileLibraryView.vue";
 import FirmwareFlasherView from "@/views/FirmwareFlasherView.vue";
 
