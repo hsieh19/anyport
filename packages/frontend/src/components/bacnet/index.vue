@@ -11,7 +11,6 @@ const deviceStore = useDeviceStore();
 
 // 通过 templateRef 调用子组件暴露的扫描方法
 const explorerRef = ref<InstanceType<typeof BacnetDeviceExplorer> | null>(null);
-const isScanning = ref(false);
 
 // --- 连接状态 ---
 const protocolMode = ref<'mstp' | 'ip'>('ip');
