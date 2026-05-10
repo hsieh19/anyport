@@ -190,8 +190,8 @@
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
-  min-width: 180px;
-  max-width: 220px;
+  min-width: 220px;
+  max-width: 280px;
 }
 
 .gateway-select {
