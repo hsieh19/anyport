@@ -8,7 +8,7 @@ const emits = defineEmits<{
 }>();
 
 const appVersion = __APP_VERSION__;
-// 读取 URL 参数以同步激活状态；对于被隐藏的视图（如 flasher），这会确保侧边栏没有任何菜单项处于虚假高亮状态
+// 读取 URL 参数以同步激活状态，确保侧边栏没有任何菜单项处于虚假高亮状态
 const activeTab = ref(new URLSearchParams(window.location.search).get("view") || "modbus");
 const showSponsor = ref(false);
 

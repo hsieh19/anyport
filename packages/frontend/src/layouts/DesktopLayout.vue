@@ -6,7 +6,6 @@ import ModbusPanel from "@/components/modbus/index.vue";
 import BacnetPanel from "@/components/bacnet/index.vue";
 import RawSerialPanel from "@/components/raw/index.vue";
 import ProfileLibraryView from "@/views/ProfileLibraryView.vue";
-import FirmwareFlasherView from "@/views/FirmwareFlasherView.vue";
 
 const currentView = ref(new URLSearchParams(window.location.search).get("view") || "modbus");
 
@@ -28,8 +27,6 @@ const pageTitle = computed(() => {
       return "BACnet 调试";
     case "profiles":
       return "点表库管理";
-    case "flasher":
-      return "固件烧录工具";
     default:
       return "控制台";
   }
@@ -70,7 +67,6 @@ const pageTitle = computed(() => {
             <RawSerialPanel v-else-if="currentView === 'raw232'" />
             <BacnetPanel v-else-if="currentView === 'bacnet'" />
             <ProfileLibraryView v-else-if="currentView === 'profiles'" />
-            <FirmwareFlasherView v-else-if="currentView === 'flasher'" />
             <div v-else class="placeholder-view">
               <h3>功能开发中...</h3>
             </div>

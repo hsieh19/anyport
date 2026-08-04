@@ -42,7 +42,7 @@ function handleClose() {
 }
 
 function openFlasher() {
-  window.open("?view=flasher", "_blank");
+  window.open("https://flash.anyport.one", "_blank");
 }
 </script>
 

@@ -13,7 +13,6 @@
   "dependencies": {
     "@anyport/shared": "workspace:*",
     "echarts": "^6.0.0",
-    "esptool-js": "^0.6.0",
     "idb": "^8.0.3",
     "lucide-vue-next": "^0.574.0",
     "mqtt": "^5.15.0",
