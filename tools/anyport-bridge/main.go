@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,9 +65,47 @@ func main() {
 	// 2. 协程：循环读取 UDP 数据包并分发给所有 WS 客户端 (BACnet 广播模式)
 	go readUDPAndBroadcast()
 
-	// 3. 启动 WebSocket 服务器
+	// 3. 启动 WebSocket 服务器与局域网网关 HTTP 代理接口 (支持 Cloudflare Pages HTTPS 穿透访问局域网网关)
 	http.HandleFunc("/ws", handleWebSocket)
+	http.HandleFunc("/proxy", handleHttpProxy)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *wsPort), nil))
+}
+
+func handleHttpProxy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Target-Url")
+	w.Header().Set("Access-Control-Allow-Private-Network", "true")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	targetUrl := r.URL.Query().Get("url")
+	if targetUrl == "" {
+		targetUrl = r.Header.Get("X-Target-Url")
+	}
+	if !strings.HasPrefix(targetUrl, "http://") && !strings.HasPrefix(targetUrl, "https://") {
+		http.Error(w, `{"ok":false,"error":"invalid_target_url"}`, http.StatusBadRequest)
+		return
+	}
+	req, err := http.NewRequest(r.Method, targetUrl, r.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {

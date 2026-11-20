@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.3.0] - 2026-11-20
+
+### Added
+
+- **架构轻量化与 Windows 绿色单文件发布**:
+  - 全面退役沉重的 Docker 容器化方案，转向面向工控现场的轻量免安装单可执行文件。
+  - 新增全功能客户端 **`anyport.exe`**：基于 Go 原生开发，通过 `//go:embed` 将前端静态资源（HTML/JS/CSS）一体化嵌入；内置本地 SPA 文件服务、WebSocket 协议网桥（`/ws`）与反向代理（`/proxy`），启动后自动拉起默认浏览器访问 `http://127.0.0.1:8081`，体积仅约 8MB。
+  - 保留并解耦轻量独立网桥 **`anyport-bridge.exe`**（约 6MB），满足无头或纯中继转发环境。
+  - 新增 `tools/build-dist.bat` 一键打包脚本与根目录 `pnpm run build:exe` 便捷指令。
+  - 升级 GitHub Actions 自动化发布流水线：标签推送时自动构建并发布 `anyport.exe` 与 `anyport-bridge.exe` 资产。
+- **全新 AnyPort 网关控制台**:
+  - 新增专用硬件网关管理视图（`GatewayConsoleView.vue`），支持配置 ESP32 核心网关的 WiFi 无线、W5500 硬以太网、双路 RS485 端口及 7 种工控业务模式。
+  - 支持网关全量硬件遥测监控（运行时间、结温、RAM/Flash、总线延时与丢包率诊断）以及远程 OTA 固件升级。
+  - 网桥反向代理支持：本地网桥引入 `/proxy` 接口，解决在 HTTPS 部署环境下访问局域网 HTTP 网关接口的 Mixed Content 跨域问题。
+
+### Changed
+
+- **UI 交互与输入控件体验升级**:
+  - **网关地址输入拆分**：将网关控制台顶部的地址输入框拆分为独立的“协议下拉选择框 (`http://` / `https://`)”与“IP/域名输入框”，无需手动输入协议前缀，提升输入效率与视觉工整度。
+- **项目工程清理与文档同步**:
+  - 彻底清理退役了 `Dockerfile`、`.dockerignore` 以及历史 Docker 镜像工作流。
+  - 将构建脚本归拢至 `tools/build-dist.bat`，保持项目根目录整洁。
+  - 更新 `README.md` 部署与使用章节，对齐单文件绿色分发模式。
+
 ## [1.2.0] - 2026-05-02
 
 ### Added

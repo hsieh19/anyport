@@ -1,0 +1,111 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build Frontend
+        run: pnpm --filter frontend build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Prepare Frontend Dist for Anyport
+        run: |
+          mkdir -p tools/anyport/dist
+          cp -r packages/frontend/dist/. tools/anyport/dist/
+
+      - name: Build Windows Binaries
+        run: |
+          # 1. 编译纯网桥 anyport-bridge.exe
+          cd tools/anyport-bridge
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o ../../anyport-bridge.exe main.go
+          cd ../..
+
+          # 2. 编译全功能客户端 anyport.exe
+          cd tools/anyport
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o ../../anyport.exe main.go
+          cd ../..
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Extract Changelog segment
+        id: extract_changelog
+        run: |
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          VERSION_NUM="${VERSION#v}"
+          
+          echo "## 🚀 Anyport 发布说明" > release_body.txt
+          echo "" >> release_body.txt
+          echo "### 📦 可执行程序下载 (Windows x64)" >> release_body.txt
+          echo "- **anyport.exe**: 推荐。绿色单文件客户端，内置 WebUI 前端与网桥，双击即可在浏览器中开始工业调试。" >> release_body.txt
+          echo "- **anyport-bridge.exe**: 独立轻量本地网桥，用于中继透明转发。" >> release_body.txt
+          echo "" >> release_body.txt
+          echo "---" >> release_body.txt
+          echo "" >> release_body.txt
+          
+          # 提取 changelog 并追加
+          sed -n "/## \[$VERSION_NUM\]/,/## \[/p" CHANGELOG.md | sed '$d' >> release_body.txt
+
+      - name: Prepare R2 Upload Directory
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+        run: |
+          mkdir -p r2_upload/tools
+          cp anyport.exe r2_upload/tools/anyport.exe
+          cp anyport-bridge.exe r2_upload/tools/anyport-bridge.exe
+          cp anyport.exe "r2_upload/tools/anyport_${VERSION}.exe"
+          cp anyport-bridge.exe "r2_upload/tools/anyport-bridge_${VERSION}.exe"
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          aws s3 sync ./r2_upload "s3://${{ secrets.R2_BUCKET }}/anyport" --endpoint-url "$ENDPOINT_URL"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_body.txt
+          files: |
+            anyport.exe
+            anyport-bridge.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

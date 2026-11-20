@@ -19,9 +19,9 @@ const handleImageProtection = (e: Event) => {
 const workerBase = "https://update.anyport.one";
 const rewardImgUrl = `${workerBase}/anyport/reward.png`;
 
-function handleDownload() {
+function handleDownload(ver: "anyport" | "bridge" = "anyport") {
   // 1. 先请求签名地址
-  fetch(`${workerBase}/anyport/get-link?ver=bridge`)
+  fetch(`${workerBase}/anyport/get-link?ver=${ver}`)
     .then((res) => res.json())
     .then((data) => {
       if (data.url) {
@@ -81,9 +81,14 @@ function openFlasher() {
 
             <footer class="sponsor-footer">
               <div class="footer-actions">
-                <button class="btn-done" @click="handleDownload">
-                  下载 anyport-bridge
-                </button>
+                <div class="btn-row">
+                  <button class="btn-done" @click="handleDownload('anyport')">
+                    下载 anyport
+                  </button>
+                  <button class="btn-done" @click="handleDownload('bridge')">
+                    下载 anyport-bridge
+                  </button>
+                </div>
                 <button class="btn-outline" @click="openFlasher">
                   ESP32 固件烧录工具 ↗
                 </button>
@@ -199,16 +204,27 @@ function openFlasher() {
 
 .footer-actions {
   display: flex;
-  flex-direction: row;
-  gap: 1rem;
+  flex-direction: column;
+  gap: 0.75rem;
   width: 100%;
 }
 
-.btn-done, .btn-outline {
+.btn-row {
+  display: flex;
+  flex-direction: row;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.btn-row .btn-done {
   flex: 1;
+}
+
+.btn-done, .btn-outline {
   padding: 0.75rem;
   border-radius: var(--radius-md);
   font-weight: 600;
+  font-size: 0.95rem;
   cursor: pointer;
   transition: all 0.3s;
 }
@@ -225,6 +241,7 @@ function openFlasher() {
 }
 
 .btn-outline {
+  width: 100%;
   background: transparent;
   color: var(--color-primary);
   border: 1px solid var(--color-primary);

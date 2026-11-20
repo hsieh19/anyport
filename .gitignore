@@ -130,6 +130,11 @@ google_antigravity/
 
 # Temporary files
 tmp/
+r2_upload/
+release_body.txt
 
 # Binaries
 *.exe
+*.exe~
+tools/anyport/dist/
+

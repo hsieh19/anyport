@@ -17,6 +17,7 @@ const menuItems = [
   { id: "raw232", label: "串口调试", icon: "📟" },
   { id: "bacnet", label: "BACnet 调试", icon: "🏢" },
   { id: "profiles", label: "点表库", icon: "📚" },
+  { id: "gateway", label: "网关控制台", icon: "🎛️" },
   { id: "dlt645", label: "DL/T 645", icon: "⚡", disabled: true },
   { id: "mqtt", label: "Remote (MQTT)", icon: "☁️", disabled: true },
   { id: "settings", label: "设置", icon: "⚙️", disabled: true },

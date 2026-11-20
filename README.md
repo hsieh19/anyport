@@ -93,7 +93,8 @@ anyport/
 - `packages/frontend`: 前端应用 (Vue 3 + Vite)
 - `packages/shared`: 跨项目共享的协议类型定义与工具库
 - `esp32/AnyPortGateway`: ESP32-C3 核心网关固件，集成 W5500 以太网驱动与 MQTT 转发功能
-- `tools/anyport-bridge`: 基于 Go 编写的跨平台本地桥接程序，实现 Modbus TCP & BACnet 穿透访问
+- `tools/anyport`: 基于 Go 编写的全功能绿色单文件客户端，内嵌 WebUI 与网桥服务，双击即开即用
+- `tools/anyport-bridge`: 基于 Go 编写的跨平台轻量本地网桥程序，实现 Modbus TCP & BACnet 穿透访问
 
 ## 🚀 本地运行与开发
 
@@ -122,28 +123,21 @@ pnpm dev
 pnpm build
 ```
 
-## 🐳 Docker 部署
+## 📦 Windows 绿色单文件分发 (推荐)
 
-您可以直接使用预构建的镜像，或在本地构建镜像。由于前端涉及到 Web Serial API，请确保通过 **HTTPS** 或 **localhost** 访问应用，否则浏览器会禁用该 API。
+Anyport 现已全面轻量化，专为工业现场打造：无需配置复杂的容器或安装环境，提供开箱即用的 Windows 单可执行程序。
 
-### 使用预构建镜像 (推荐)
+### 下载与使用
+1. 前往 GitHub Releases 下载最新的 `anyport.exe`。
+2. 双击 `anyport.exe`，程序将自动启动本地服务并拉起系统默认浏览器访问 `http://127.0.0.1:8081`。
+3. 全功能自包含：内置 WebUI 前端、Modbus TCP 穿透代理与 BACnet UDP 广播网桥，串口直通无需繁琐配置。
 
-```bash
-# 从 GitHub Container Registry 拉取并运行
-docker run -d --name anyport -p 8080:80 ghcr.io/hsieh19/anyport:latest
-```
-
-### 本地构建镜像
+### 本地构建 exe
 
 ```bash
-# 在项目根目录下执行
-docker build -t anyport .
-
-# 运行容器
-docker run -d --name anyport -p 8080:80 anyport
+# 执行一键打包脚本（自动构建前端并生成 anyport.exe 及 anyport-bridge.exe）
+.\tools\build-dist.bat
 ```
-
-运行后，访问 `http://localhost:8080` 即可使用。
 
 ---
 
