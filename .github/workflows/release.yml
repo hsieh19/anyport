@@ -80,14 +80,10 @@ jobs:
           sed -n "/## \[$VERSION_NUM\]/,/## \[/p" CHANGELOG.md | sed '$d' >> release_body.txt
 
       - name: Prepare R2 Upload Directory
-        env:
-          VERSION: ${{ steps.get_version.outputs.VERSION }}
         run: |
           mkdir -p r2_upload/tools
           cp anyport.exe r2_upload/tools/anyport.exe
           cp anyport-bridge.exe r2_upload/tools/anyport-bridge.exe
-          cp anyport.exe "r2_upload/tools/anyport_${VERSION}.exe"
-          cp anyport-bridge.exe "r2_upload/tools/anyport-bridge_${VERSION}.exe"
 
       - name: Upload to Cloudflare R2
         env:
