@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.3.1] - 2026-11-20
+
+### Fixed
+
+- **本地网桥 HTTP 代理修复 (`/proxy`)**:
+  - 修复网桥在向目标网关转发 HTTP POST/PUT 请求时由于透传流导致的 `Content-Length` 丢失与 `Transfer-Encoding: chunked` 分块传输问题。
+  - 显式为代理请求注入准确的 `Content-Length` 标头并禁用分块编码，彻底解决 ESP32 嵌入式单片机在保存全量参数时解析 JSON 失败（报错 `400 invalid_json`）的通信缺陷。
+- **发布流水线与存储桶资产精简**:
+  - 优化 GitHub Actions 发布工作流（`.github/workflows/release.yml`）：移除 R2 上传时的冗余版本号文件，统一以 `anyport.exe` 与 `anyport-bridge.exe` 核心程序覆盖归集，恪守 KISS 原则保持云存储简洁。
+
 ## [1.3.0] - 2026-11-20
 
 ### Added

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -88,11 +89,19 @@ func handleHttpProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"ok":false,"error":"invalid_target_url"}`, http.StatusBadRequest)
 		return
 	}
-	req, err := http.NewRequest(r.Method, targetUrl, r.Body)
+
+	var bodyBytes []byte
+	if r.Body != nil {
+		bodyBytes, _ = io.ReadAll(r.Body)
+		_ = r.Body.Close()
+	}
+
+	req, err := http.NewRequest(r.Method, targetUrl, bytes.NewReader(bodyBytes))
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"ok":false,"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
 	}
+	req.ContentLength = int64(len(bodyBytes))
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
