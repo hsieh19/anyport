@@ -58,6 +58,32 @@ const netTab = ref<'wifi' | 'w5500' | 'rs485'>('wifi');
 const showTelemetryModal = ref(false);
 const isRetestingTel = ref(false);
 
+// 重启轮询与 DHCP 新 IP 上报弹窗状态
+const isRebooting = ref(false);
+const dhcpReportModal = reactive({
+  show: false,
+  ssid: '',
+  wifiIp: '',
+  wifiMask: '',
+  wifiGw: '',
+  wifiDns: '',
+});
+
+function applyReportedWifiIp(connectNow = false) {
+  if (!dhcpReportModal.wifiIp) return;
+  gwProtocol.value = 'http://';
+  gwHost.value = dhcpReportModal.wifiIp;
+  localStorage.setItem(STORAGE_KEY_API_BASE, normalizedBase());
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(dhcpReportModal.wifiIp).catch(() => {});
+  }
+  dhcpReportModal.show = false;
+  showToast(`已填入新网关地址 http://${dhcpReportModal.wifiIp} 并复制 IP`);
+  if (connectNow) {
+    connectDevice();
+  }
+}
+
 // Toast 提示
 const toastState = reactive({
   show: false,
@@ -794,10 +820,65 @@ async function saveConfig() {
     };
 
     await apiPost('/api/config', payload);
-    showToast('配置已提交，网关正在重启 (3.5秒后自动重连)');
-    setTimeout(connectDevice, 3500);
+    showToast('配置已提交，网关正在重启并连接网络，请稍候...');
+    await waitForRebootAndReportIp(payload.wifi.ssid, isDhcp, payload.wifi.ip);
   } catch (e: any) {
     showToast('保存失败: ' + e.message, false);
+  }
+}
+
+// 重启后持续轮询网关状态，连上 WiFi 后自动回显并上报新分配的局域网 IP
+async function waitForRebootAndReportIp(targetSsid: string, isDhcp: boolean, staticIp: string) {
+  isRebooting.value = true;
+  isOnline.value = false;
+
+  // 等待 2.5 秒让网关完成软重启断开旧连接
+  await new Promise((r) => setTimeout(r, 2500));
+
+  const maxAttempts = 22;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const t0 = performance.now();
+      const s = await apiGet('/api/sys/status');
+      const lat = Math.max(1, Math.round(performance.now() - t0));
+      applyStatusPayload(s, lat);
+
+      // 同步全量配置到表单
+      await connectDevice();
+
+      // 若已成功连上路由器且拿到了有效局域网 IP，主动弹出新 IP 报告弹窗
+      if (
+        s.wifiConnected &&
+        s.wifiIp &&
+        s.wifiIp !== '0.0.0.0' &&
+        s.wifiIp !== '192.168.4.1'
+      ) {
+        dhcpReportModal.ssid = targetSsid || form.wifi.ssid || 'WiFi';
+        dhcpReportModal.wifiIp = s.wifiIp;
+        dhcpReportModal.wifiMask = s.wifiMask || '255.255.255.0';
+        dhcpReportModal.wifiGw = s.wifiGw || '--';
+        dhcpReportModal.wifiDns = s.wifiDns || '--';
+        dhcpReportModal.show = true;
+      } else if (!isDhcp && staticIp) {
+        showToast(`网关已重启，静态 IP 已设为 ${staticIp}`);
+      } else if (targetSsid && !s.wifiConnected) {
+        showToast('网关已重启，但未能连入指定 WiFi，已回退至 AP 热点模式', false);
+      }
+      isRebooting.value = false;
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+
+  isRebooting.value = false;
+  if (!isDhcp && staticIp) {
+    gwProtocol.value = 'http://';
+    gwHost.value = staticIp;
+    localStorage.setItem(STORAGE_KEY_API_BASE, normalizedBase());
+    showToast(`网关已重启，地址已自动切换为静态 IP ${staticIp}（若不可达可在 3 分钟内连 anyport 热点 192.168.4.1 排查）`);
+  } else {
+    showToast('原地址响应超时（若 DHCP 分配了新 IP，可在 3 分钟内连接 anyport 热点访问 192.168.4.1 查看最新 IP）', false);
   }
 }
 
@@ -1017,6 +1098,37 @@ onUnmounted(() => {
         <div class="gw-card-title">
           <span>WiFi 设置</span>
           <span class="title-hint">局域网 STA / AP 配网</span>
+        </div>
+        <div
+          v-if="
+            isOnline &&
+            sysStatus.wifiConnected &&
+            sysStatus.wifiIp &&
+            sysStatus.wifiIp !== '0.0.0.0' &&
+            sysStatus.wifiIp !== '192.168.4.1'
+          "
+          class="notice-box"
+          style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px"
+        >
+          <div>
+            🎉 <b>网关已成功接入 WiFi 局域网！</b>当前分配到的 IP 地址为：
+            <b style="color: #10b981; font-size: 15px; font-family: Consolas, monospace">
+              {{ sysStatus.wifiIp }}
+            </b>
+            <span style="color: var(--color-text-secondary); margin-left: 8px">
+              (掩码: {{ sysStatus.wifiMask || '255.255.255.0' }} · 网关: {{ sysStatus.wifiGw || '--' }})
+            </span>
+          </div>
+          <button
+            v-if="gwHost.trim() !== sysStatus.wifiIp"
+            class="btn-sm btn-success"
+            @click="
+              dhcpReportModal.wifiIp = sysStatus.wifiIp;
+              applyReportedWifiIp(false);
+            "
+          >
+            📋 复制并填入顶部网关地址 ({{ sysStatus.wifiIp }})
+          </button>
         </div>
         <div class="grid-4" style="margin-bottom: 12px">
           <div class="form-item">
@@ -1454,52 +1566,8 @@ onUnmounted(() => {
           </span>
         </div>
 
-        <div class="q-grid">
-          <div class="q-card">
-            <div class="q-label">🎯 主从应答成功率</div>
-            <div class="q-val" :style="{ color: qualitySuccessRate.color }">
-              {{ qualitySuccessRate.text }}
-            </div>
-            <div class="q-sub">
-              应答: {{ monitorStats.respCount }} / 请求: {{ monitorStats.reqCount }}
-            </div>
-          </div>
-          <div class="q-card">
-            <div class="q-label">⏱️ 从站响应耗时 (RTT)</div>
-            <div class="q-val" style="color: #0284c7">
-              {{ monitorStats.respCount > 0 ? `${monitorStats.lastRttMs} ms` : '-- ms' }}
-            </div>
-            <div class="q-sub">
-              {{
-                monitorStats.respCount > 0
-                  ? `均值: ${monitorStats.avgRttMs} ms | 峰值: ${monitorStats.maxRttMs} ms`
-                  : '均值: -- ms | 峰值: -- ms'
-              }}
-            </div>
-          </div>
-          <div class="q-card">
-            <div class="q-label">⚠️ 超时无应答 / 异常码</div>
-            <div
-              class="q-val"
-              :style="{ color: monitorStats.timeoutCount > 0 ? '#f59e0b' : '#10b981' }"
-            >
-              {{ monitorStats.timeoutCount }}
-            </div>
-            <div class="q-sub">Modbus 异常响应: {{ monitorStats.exceptionCount }}</div>
-          </div>
-          <div class="q-card">
-            <div class="q-label">⚡ CRC 错帧 / 总捕获帧</div>
-            <div
-              class="q-val"
-              :style="{ color: monitorStats.crcErrorCount > 0 ? '#ef4444' : '#10b981' }"
-            >
-              {{ monitorStats.crcErrorCount }}
-            </div>
-            <div class="q-sub">总线总物理帧: {{ monitorStats.totalFrames }}</div>
-          </div>
-        </div>
-
-        <div class="grid-4" style="align-items: end; margin-bottom: 10px">
+        <!-- 顶部：过滤与操作控制栏 -->
+        <div class="grid-4 monitor-toolbar">
           <div class="form-item">
             <label>过滤从站 ID (0 = 全部从站)</label>
             <input
@@ -1547,27 +1615,79 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div>
-          <div class="monitor-head">
-            <b>实时总线报文嗅探流 (最近 100 帧 · 自动标注主从身份与从站应答耗时)</b>
-            <span>串口参数复用顶部所选 485 通道</span>
+        <!-- 下方分栏：左下质量诊断指标 + 右下实时报文嗅探流 -->
+        <div class="monitor-split">
+          <div class="q-grid">
+            <div class="q-card">
+              <div class="q-head">
+                <span class="q-label">🎯 主从应答成功率</span>
+                <span class="q-sub">
+                  应答: {{ monitorStats.respCount }} / 请求: {{ monitorStats.reqCount }}
+                </span>
+              </div>
+              <div class="q-val" :style="{ color: qualitySuccessRate.color }">
+                {{ qualitySuccessRate.text }}
+              </div>
+            </div>
+            <div class="q-card">
+              <div class="q-head">
+                <span class="q-label">⏱️ 从站响应耗时 (RTT)</span>
+                <span class="q-sub">
+                  {{
+                    monitorStats.respCount > 0
+                      ? `均值: ${monitorStats.avgRttMs} ms | 峰值: ${monitorStats.maxRttMs} ms`
+                      : '均值: -- ms | 峰值: -- ms'
+                  }}
+                </span>
+              </div>
+              <div class="q-val" style="color: #0284c7">
+                {{ monitorStats.respCount > 0 ? `${monitorStats.lastRttMs} ms` : '-- ms' }}
+              </div>
+            </div>
+            <div class="q-card">
+              <div class="q-head">
+                <span class="q-label">⚠️ 超时无应答 / 异常码</span>
+                <span class="q-sub">Modbus 异常响应: {{ monitorStats.exceptionCount }}</span>
+              </div>
+              <div
+                class="q-val"
+                :style="{ color: monitorStats.timeoutCount > 0 ? '#f59e0b' : '#10b981' }"
+              >
+                {{ monitorStats.timeoutCount }}
+              </div>
+            </div>
+            <div class="q-card">
+              <div class="q-head">
+                <span class="q-label">⚡ CRC 错帧 / 总捕获帧</span>
+                <span class="q-sub">总线总物理帧: {{ monitorStats.totalFrames }}</span>
+              </div>
+              <div
+                class="q-val"
+                :style="{ color: monitorStats.crcErrorCount > 0 ? '#ef4444' : '#10b981' }"
+              >
+                {{ monitorStats.crcErrorCount }}
+              </div>
+            </div>
           </div>
-          <div ref="monitorBoxRef" class="monitor-box">
-            <div v-if="monitorLogs.length === 0">暂无报文，等待总线数据...</div>
-            <div v-for="(l, idx) in monitorLogs" :key="idx" class="log-row">
-              <span class="log-ts">[{{ l.t }}ms]</span>
-              <span v-if="l.meta === 2" class="tag-resp">
-                RESP 从站应答{{ l.rtt ? ` · ${l.rtt}ms` : '' }}
-              </span>
-              <span v-else-if="l.meta === 3" class="tag-exc">
-                EXC 异常应答{{ l.rtt ? ` · ${l.rtt}ms` : '' }}
-              </span>
-              <span v-else-if="l.meta === 4" class="tag-crc">CRC 校验错帧</span>
-              <span v-else class="tag-req">REQ 主站请求</span>
-              <span class="log-meta">
-                [ID:{{ l.uid ?? 0 }} FC:0x{{ (l.fc ?? 0).toString(16).toUpperCase().padStart(2, '0') }}]
-              </span>
-              <span class="log-hex">{{ l.hex }}</span>
+
+          <div class="monitor-stream">
+            <div ref="monitorBoxRef" class="monitor-box">
+              <div v-if="monitorLogs.length === 0">暂无报文，等待总线数据...</div>
+              <div v-for="(l, idx) in monitorLogs" :key="idx" class="log-row">
+                <span class="log-ts">[{{ l.t }}ms]</span>
+                <span v-if="l.meta === 2" class="tag-resp">
+                  RESP 从站应答{{ l.rtt ? ` · ${l.rtt}ms` : '' }}
+                </span>
+                <span v-else-if="l.meta === 3" class="tag-exc">
+                  EXC 异常应答{{ l.rtt ? ` · ${l.rtt}ms` : '' }}
+                </span>
+                <span v-else-if="l.meta === 4" class="tag-crc">CRC 校验错帧</span>
+                <span v-else class="tag-req">REQ 主站请求</span>
+                <span class="log-meta">
+                  [ID:{{ l.uid ?? 0 }} FC:0x{{ (l.fc ?? 0).toString(16).toUpperCase().padStart(2, '0') }}]
+                </span>
+                <span class="log-hex">{{ l.hex }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1691,7 +1811,62 @@ onUnmounted(() => {
     </div>
 
     <!-- 3. 底部全量保存按钮 -->
-    <button class="btn-save-main" @click="saveConfig">保存全量配置并重启网关</button>
+    <button class="btn-save-main" :disabled="isRebooting" @click="saveConfig">
+      {{ isRebooting ? '⏳ 网关正在重启并获取网络 IP，请稍候...' : '保存全量配置并重启网关' }}
+    </button>
+
+    <!-- 3.5 DHCP 配网成功新 IP 上报弹窗 -->
+    <Teleport to="body">
+      <div
+        v-if="dhcpReportModal.show"
+        class="tel-overlay"
+        @click.self="dhcpReportModal.show = false"
+      >
+        <div class="tel-modal" style="max-width: 520px">
+          <div class="tel-modal-head">
+            <span>🎉 网关已连入 WiFi · 新分配 IP 地址上报</span>
+            <button class="tel-close" @click="dhcpReportModal.show = false">✕</button>
+          </div>
+          <div class="tel-body">
+            <div class="tel-header-card" style="text-align: center; padding: 18px 16px">
+              <div style="font-size: 13px; color: #94a3b8; margin-bottom: 6px">
+                已接入无线网络 <b>{{ dhcpReportModal.ssid }}</b> · 路由器分配的局域网 IP：
+              </div>
+              <div
+                style="
+                  font-size: 28px;
+                  font-weight: 800;
+                  color: #10b981;
+                  font-family: Consolas, Monaco, monospace;
+                  letter-spacing: 0.5px;
+                "
+              >
+                {{ dhcpReportModal.wifiIp }}
+              </div>
+            </div>
+
+            <div class="tel-dual-row" style="margin-top: 12px">
+              <span>子网掩码: <b class="tel-cyan">{{ dhcpReportModal.wifiMask }}</b></span>
+              <span>默认网关: <b class="tel-cyan">{{ dhcpReportModal.wifiGw }}</b></span>
+              <span>DNS: <b class="tel-cyan">{{ dhcpReportModal.wifiDns }}</b></span>
+            </div>
+
+            <div style="margin-top: 14px; font-size: 12px; color: #94a3b8; line-height: 1.6">
+              💡 <b>后续操作提示：</b>网关将在无客户端连接热点 3 分钟后自动关闭
+              <code>anyport</code> 临时热点。您可以点击下方按钮将新 IP 填入顶部网关地址栏，然后将电脑切换回路由器局域网直接访问该 IP。
+            </div>
+          </div>
+          <div class="tel-footer">
+            <button class="btn-sm btn-secondary" @click="dhcpReportModal.show = false">
+              保持当前连接
+            </button>
+            <button class="btn-sm btn-success" @click="applyReportedWifiIp(false)">
+              📋 复制新 IP 并填入网关地址
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- 4. 全局状态诊断弹窗 -->
     <Teleport to="body">
@@ -2213,59 +2388,92 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
-/* 总线质量看板与监控框 */
-.q-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
-  margin-bottom: 16px;
+/* 总线质量看板与监控框 (上 + 左下 + 右下布局) */
+.monitor-toolbar {
+  align-items: end;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--color-border);
 }
-@media (max-width: 900px) {
+.monitor-split {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 16px;
+  align-items: stretch;
+}
+.q-grid {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+@media (max-width: 1024px) {
+  .monitor-split {
+    grid-template-columns: 1fr;
+  }
   .q-grid {
+    display: grid;
     grid-template-columns: repeat(2, 1fr);
   }
 }
+@media (max-width: 640px) {
+  .q-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .q-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  padding: 14px 16px;
+  padding: 12px 14px;
+}
+.q-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
 }
 .q-label {
   font-size: 12px;
   color: var(--color-text-secondary);
   font-weight: 600;
-  margin-bottom: 6px;
+  white-space: nowrap;
 }
 .q-val {
-  font-size: 24px;
+  font-size: 22px;
+  line-height: 1.2;
   font-weight: 700;
   font-family: Consolas, Monaco, monospace;
 }
 .q-sub {
   font-size: 12px;
   color: var(--color-text-secondary);
-  margin-top: 4px;
   font-family: Consolas, Monaco, monospace;
+  white-space: nowrap;
 }
-.monitor-head {
+.monitor-stream {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-  color: var(--color-text-secondary);
+  flex-direction: column;
+  min-width: 0;
 }
 .monitor-box {
+  flex: 1;
   background: #0f172a;
   color: #e2e8f0;
   font-family: Consolas, Monaco, monospace;
   font-size: 13px;
   line-height: 1.7;
-  height: 360px;
+  height: 420px;
+  min-height: 380px;
   overflow-y: auto;
   padding: 12px 16px;
   border-radius: 8px;
-  margin-top: 10px;
   border: 1px solid #1e293b;
 }
 .log-row {
