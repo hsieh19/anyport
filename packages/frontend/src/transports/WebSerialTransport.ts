@@ -29,6 +29,7 @@ declare global {
         writable: WritableStream<Uint8Array>;
         open(options: SerialOptions): Promise<void>;
         close(): Promise<void>;
+        setSignals(signals: { dataTerminalReady?: boolean; requestToSend?: boolean; break?: boolean }): Promise<void>;
         getInfo(): SerialPortInfo;
     }
 
@@ -132,6 +133,9 @@ export class WebSerialTransport implements ITransportAdapter {
                 flowControl: serialConfig.flowControl ?? 'none'
             });
 
+            // 连接后立即按 RTS -> DTR 顺序拉低控制线，使整个会话期保持 (DTR=0, RTS=0)
+            await this.clearControlSignals();
+
             // 获取读写流
             if (this.port.readable) {
                 this.reader = this.port.readable.getReader();
@@ -201,6 +205,7 @@ export class WebSerialTransport implements ITransportAdapter {
 
         // 5. 最后关闭端口
         if (this.port) {
+            await this.clearControlSignals();
             try {
                 await this.port.close();
             } catch (err) {
@@ -211,6 +216,21 @@ export class WebSerialTransport implements ITransportAdapter {
 
         this._isConnected = false;
         this.stateChangeCallback?.(false);
+    }
+
+    /**
+     * 安全拉低 RTS/DTR 控制信号（必须先拉低 RTS，再拉低 DTR）
+     * Chromium Windows (serial_io_handler_win.cc) 在单次 setSignals({ dataTerminalReady, requestToSend }) 中
+     * 会先执行 CLRDTR 再执行 CLRRTS，产生 (DTR=0, RTS=1) 状态并直接触发 ESP32-C3 USB_UART_CHIP_RESET (rst:0x15)。
+     */
+    private async clearControlSignals(): Promise<void> {
+        if (!this.port) return;
+        try {
+            await this.port.setSignals({ requestToSend: false });
+            await this.port.setSignals({ dataTerminalReady: false });
+        } catch (err) {
+            console.warn('重置串口控制信号失败:', err);
+        }
     }
 
     /**
