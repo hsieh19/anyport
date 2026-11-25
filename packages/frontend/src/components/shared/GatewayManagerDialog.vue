@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useDeviceStore } from '@/stores/deviceStore';
+import { formatDateTime } from '@/utils/id';
 import { 
   X, 
   Trash, 
@@ -45,18 +46,6 @@ function connectGateway(gw: any) {
   } else {
     alert('请先将连接模式切换为 MQTT 模式以连接此网关。');
   }
-}
-
-function formatTime(val: number) {
-  if (!val) return '-';
-  const date = new Date(val);
-  const Y = date.getFullYear();
-  const M = String(date.getMonth() + 1).padStart(2, '0');
-  const D = String(date.getDate()).padStart(2, '0');
-  const h = String(date.getHours()).padStart(2, '0');
-  const m = String(date.getMinutes()).padStart(2, '0');
-  const s = String(date.getSeconds()).padStart(2, '0');
-  return `${Y}-${M}-${D} ${h}:${m}:${s}`;
 }
 </script>
 
@@ -121,7 +110,7 @@ function formatTime(val: number) {
                     <td>
                       <div class="time-info">
                         <Clock :size="12" />
-                        <span>{{ formatTime(gw.lastSeen) }}</span>
+                        <span>{{ formatDateTime(gw.lastSeen) }}</span>
                       </div>
                     </td>
                     <td>

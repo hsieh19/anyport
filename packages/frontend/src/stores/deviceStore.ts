@@ -9,6 +9,7 @@ import { RawSerialAdapter } from '@/protocols/raw';
 import { ProtocolType, FrameCheckResult, type IProtocolAdapter } from '@shared/types/protocol.types';
 import { type ConnectionConfig as GlobalConnectionConfig, type ITransportAdapter, type IMqttTransport, type GatewayStatusInfo } from '@shared/types/transport.types';
 import { bytesToHexSpaced } from '@/utils/hex';
+import { generateShortId } from '@/utils/id';
 import { translateCommError } from '@/utils/errorTranslator';
 
 // --- 类型定义 ---
@@ -30,11 +31,6 @@ export interface WebSerialConfig {
     dataBits: number;
     stopBits: number;
     parity: string;
-}
-
-export interface ModbusTcpOptions {
-    ip: string;
-    port: number;
 }
 
 export interface MqttConfig {
@@ -485,7 +481,7 @@ export const useDeviceStore = defineStore('device', () => {
 
     function addLog(direction: 'tx' | 'rx', data: Uint8Array, parsed?: any): void {
         _appendLog({
-            id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+            id: generateShortId(),
             timestamp: new Date(),
             direction,
             data: new Uint8Array(data),
@@ -572,7 +568,7 @@ export const useDeviceStore = defineStore('device', () => {
 
         // [R2] 复用 _appendLog，消除手动构建 LogEntry 的重复逻辑
         _appendLog({
-            id: 'err-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+            id: generateShortId('err'),
             timestamp: new Date(),
             direction: 'rx',
             data: new Uint8Array(0),
@@ -589,8 +585,8 @@ export const useDeviceStore = defineStore('device', () => {
     let pingSeq = 1;
 
     function handlePingResult(result: Record<string, any>): void {
-        const entry: LogEntry = {
-            id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        _appendLog({
+            id: generateShortId(),
             timestamp: new Date(),
             direction: 'rx',
             data: new Uint8Array(0),
@@ -605,12 +601,7 @@ export const useDeviceStore = defineStore('device', () => {
                 localIp: result.localIp,
                 link: result.link
             }
-        };
-
-        // 核心修复：Ping 结果目前仅服务于 Modbus 诊断视图，应始终存入 modbusLogs
-        // 绝不能根据 currentProtocol 动来动去
-        modbusLogs.value.unshift(entry);
-        if (modbusLogs.value.length > 500) modbusLogs.value.pop();
+        }, ProtocolType.MODBUS_RTU);
     }
 
     function startPing() {
@@ -647,7 +638,7 @@ export const useDeviceStore = defineStore('device', () => {
     }
 
     function removeGateway(id: string) {
-        gateways.value = gateways.value.filter(g => g.gatewayId !== id);
+        gateways.value = gateways.value.filter(g => g.id !== id && g.gatewayId !== id);
     }
 
     function clearOfflineGateways() {
@@ -690,8 +681,8 @@ export const useDeviceStore = defineStore('device', () => {
             
             const errorMsg = res.status === 'error' ? translateCommError(res.message) : undefined;
             
-            const entry: LogEntry = {
-                id: 'pb-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+            _appendLog({
+                id: generateShortId('pb'),
                 timestamp: new Date(),
                 direction: 'rx',
                 data: new Uint8Array(0),
@@ -705,10 +696,7 @@ export const useDeviceStore = defineStore('device', () => {
                     seq: 0,
                     link: 'bridge'
                 }
-            };
-            const targetLogs = currentProtocol.value.includes('bacnet') ? bacnetLogs : modbusLogs;
-            targetLogs.value.unshift(entry);
-            if (targetLogs.value.length > 500) targetLogs.value.pop();
+            });
             return res;
         } catch (err: any) {
             handleError(err);

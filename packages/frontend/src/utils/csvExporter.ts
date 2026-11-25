@@ -1,4 +1,5 @@
 import { historyDb } from './db';
+import { formatDateTime } from './id';
 
 /**
  * 导出 Modbus 采集历史数据为 CSV
@@ -25,15 +26,7 @@ export const exportCollectionToCsv = async (slaveAddr: number = 1, startTime?: n
     csvContent += headers.join(',') + '\n';
 
     data.forEach(item => {
-      // 采集日期精确到秒
-      const date = new Date(item.timestamp);
-      const Y = date.getFullYear();
-      const M = String(date.getMonth() + 1).padStart(2, '0');
-      const D = String(date.getDate()).padStart(2, '0');
-      const h = String(date.getHours()).padStart(2, '0');
-      const m = String(date.getMinutes()).padStart(2, '0');
-      const s = String(date.getSeconds()).padStart(2, '0');
-      const dateStr = `${Y}-${M}-${D} ${h}:${m}:${s}`;
+      const dateStr = formatDateTime(item.timestamp);
 
       const row = [
         `\t${dateStr}`, // 日期强制文本，防止 Excel 缩写

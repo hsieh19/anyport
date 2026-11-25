@@ -36,10 +36,6 @@ var (
 
 	// UDP 全局监听端口 (BACnet 默认 47808)
 	udpConn *net.UDPConn
-
-	// TCP 连接管理: 每个 WS 客户端连接映射到各自的 TCP 连接池
-	tcpConns   = make(map[string]net.Conn)
-	tcpConnsMu sync.Mutex
 )
 
 func main() {

@@ -1,5 +1,5 @@
 import { ref, computed, watch, onMounted, onActivated } from 'vue';
-import { useDeviceStore, type ConnectionType } from '@/stores/deviceStore';
+import { useDeviceStore } from '@/stores/deviceStore';
 import { useProfileStore } from '@/stores/profileStore';
 import { ModbusFunctionCode, normalizeFuncCodes, getModbusOffset } from '@/protocols/modbus';
 
@@ -7,7 +7,7 @@ export function useModbusState() {
   const deviceStore = useDeviceStore();
   const profileStore = useProfileStore();
 
-  // ✅ 生命周期：加载点表 + 恢复 modbusMode（原始逻辑）
+  // 生命周期：加载点表 + 恢复 modbusMode
   onMounted(() => {
     if (profileStore.profiles.length === 0) {
       profileStore.loadProfiles();
@@ -17,17 +17,6 @@ export function useModbusState() {
 
   onActivated(() => {
     deviceStore.setModbusMode(deviceStore.modbusMode);
-  });
-
-  // ✅ connectionType：双向绑定 store，切换时同步协议模式（原始逻辑）
-  const connectionType = computed<ConnectionType>({
-    get: () => deviceStore.connectionType,
-    set: (value: ConnectionType) => {
-      deviceStore.setConnectionType(value);
-      if (value === 'mqtt') {
-        deviceStore.setModbusMode(deviceStore.gatewayOptions.protocol);
-      }
-    }
   });
 
   // 运行模式
@@ -63,7 +52,6 @@ export function useModbusState() {
   // 弹窗控制
   const showMqttDialog = ref(false);
   const showGatewayManager = ref(false);
-  const selectedGatewayId = ref('');
 
   // 结果显示格式（统一在 state 中管理）
   const displayFormat = ref<'hex' | 'dec' | 'bin'>('dec');
@@ -75,7 +63,7 @@ export function useModbusState() {
     type: 'success' as 'success' | 'error' | 'info'
   });
 
-  // ✅ 写入确认弹窗状态
+  // 写入确认弹窗状态
   const isWriteConfirmShow = ref(false);
   const pendingWriteInfo = ref({
     regName: '',
@@ -85,7 +73,7 @@ export function useModbusState() {
     type: ''
   });
 
-  // ✅ 区块写入弹窗状态
+  // 区块写入弹窗状态
   const isBlockWriteShow = ref(false);
   const isBlockLoading = ref(false);
   const currentBlockReg = ref<any>(null);
@@ -100,15 +88,12 @@ export function useModbusState() {
   // 计算属性：PLC 地址 (Modicon 寻址)
   const plcAddress = computed(() => {
     const addr = startAddress.value;
-    // 归一化为从 1 开始的地址 (PLC Base1 格式)
     const base1Addr = useBase1.value ? addr : addr + 1;
 
     const format = (prefix: number) => {
       if (base1Addr > 9999) {
-        // 6位寻址模式：前缀占第6位，后5位为地址偏移
         return (prefix * 100000 + base1Addr).toString().padStart(6, '0');
       }
-      // 5位寻址模式
       return (prefix * 10000 + base1Addr).toString().padStart(5, '0');
     };
 
@@ -130,7 +115,7 @@ export function useModbusState() {
     }
   });
 
-  // ✅ 自动模式：寄存器选择后自动填充地址/功能码/数量
+  // 自动模式：寄存器选择后自动填充地址/功能码/数量
   function updateAutoAddress() {
     if (runMode.value === 'auto' && currentRegisterObj.value) {
       const reg = currentRegisterObj.value;
@@ -146,7 +131,7 @@ export function useModbusState() {
   watch(selectedRegisterName, updateAutoAddress);
   watch(useBase1, updateAutoAddress);
 
-  // ✅ 多值写入时自动同步数量字段
+  // 多值写入时自动同步数量字段
   watch([writeValues, manualDataType, runMode, functionCode], () => {
     const isMultiWrite = [ModbusFunctionCode.WRITE_MULTIPLE_COILS, ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS].includes(functionCode.value);
     if (!isMultiWrite) return;
@@ -166,36 +151,8 @@ export function useModbusState() {
     }
   });
 
-  // ✅ selectedGatewayId 双向同步
-  const onlineGateways = computed(() => deviceStore.gateways.filter(g => g.online));
-
-  watch(
-    () => deviceStore.mqttConfig,
-    config => {
-      if (config.siteId && config.gatewayId) {
-        const matched = `${config.siteId}/${config.gatewayId}`;
-        const exists = onlineGateways.value.some(g => g.id === matched);
-        selectedGatewayId.value = exists ? matched : '';
-      } else {
-        selectedGatewayId.value = '';
-      }
-    },
-    { deep: true, immediate: true }
-  );
-
-  watch(selectedGatewayId, value => {
-    if (!value) return;
-    const parts = value.split('/');
-    if (parts.length !== 2) return;
-    const [siteId, gatewayId] = parts;
-    if (deviceStore.mqttConfig.siteId !== siteId || deviceStore.mqttConfig.gatewayId !== gatewayId) {
-      deviceStore.saveMqttConfig({ siteId, gatewayId });
-    }
-  });
-
   return {
     runMode,
-    connectionType,
     selectedProfileId,
     selectedRegisterName,
     isProfilePickerShow,
@@ -212,7 +169,6 @@ export function useModbusState() {
     manualEndian,
     showMqttDialog,
     showGatewayManager,
-    selectedGatewayId,
     displayFormat,
     toast,
     plcAddress,
@@ -224,6 +180,5 @@ export function useModbusState() {
     blockFieldValues,
     isCollectionVisible,
     lastSentContext,
-    onlineGateways,
   };
 }

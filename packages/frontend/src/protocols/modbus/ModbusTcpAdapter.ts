@@ -5,10 +5,10 @@ import {
     type IProtocolAdapter
 } from '@shared/types/protocol.types';
 import {
-    ModbusFunctionCode,
     type ModbusRtuCommand,
     type ModbusRtuResponse
 } from './ModbusRtuAdapter';
+import { encodeModbusRequestPdu, decodeModbusReadPayload } from './modbusPdu';
 
 export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, ModbusRtuResponse> {
     readonly protocolType = ProtocolType.MODBUS_TCP;
@@ -19,7 +19,6 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
      * 编码命令（正式发送，会自增事务 ID）
      */
     encode(command: ModbusRtuCommand): Uint8Array {
-        // 只有正式发送时才自增 ID
         this.transactionId = (this.transactionId + 1) & 0xFFFF;
         return this.internalEncode(command, this.transactionId);
     }
@@ -28,99 +27,18 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
      * 预览报文（无副作用，显示即将使用的 ID）
      */
     preview(command: ModbusRtuCommand): Uint8Array {
-        // 预览下一次将要使用的 ID
         const nextId = (this.transactionId + 1) & 0xFFFF;
         return this.internalEncode(command, nextId);
     }
 
     /**
-     * 内部编码逻辑
+     * 内部编码逻辑 (MBAP 7字节报头 + PDU)
      */
     private internalEncode(command: ModbusRtuCommand, tid: number): Uint8Array {
-        const { functionCode, startAddress, quantity, values } = command;
-
-        let pdu: Uint8Array;
-
-        switch (functionCode) {
-            case ModbusFunctionCode.READ_COILS:
-            case ModbusFunctionCode.READ_DISCRETE_INPUTS:
-            case ModbusFunctionCode.READ_HOLDING_REGISTERS:
-            case ModbusFunctionCode.READ_INPUT_REGISTERS: {
-                pdu = new Uint8Array(5);
-                pdu[0] = functionCode;
-                pdu[1] = (startAddress >> 8) & 0xFF;
-                pdu[2] = startAddress & 0xFF;
-                const qty = quantity ?? 1;
-                pdu[3] = (qty >> 8) & 0xFF;
-                pdu[4] = qty & 0xFF;
-                break;
-            }
-
-            case ModbusFunctionCode.WRITE_SINGLE_COIL: {
-                pdu = new Uint8Array(5);
-                pdu[0] = functionCode;
-                pdu[1] = (startAddress >> 8) & 0xFF;
-                pdu[2] = startAddress & 0xFF;
-                const coilValue = (values?.[0] ?? 0) ? 0xFF00 : 0x0000;
-                pdu[3] = (coilValue >> 8) & 0xFF;
-                pdu[4] = coilValue & 0xFF;
-                break;
-            }
-
-            case ModbusFunctionCode.WRITE_SINGLE_REGISTER: {
-                pdu = new Uint8Array(5);
-                pdu[0] = functionCode;
-                pdu[1] = (startAddress >> 8) & 0xFF;
-                pdu[2] = startAddress & 0xFF;
-                const regValue = values?.[0] ?? 0;
-                pdu[3] = (regValue >> 8) & 0xFF;
-                pdu[4] = regValue & 0xFF;
-                break;
-            }
-
-            case ModbusFunctionCode.WRITE_MULTIPLE_COILS: {
-                const coilCount = values?.length ?? 0;
-                const byteCount = Math.ceil(coilCount / 8);
-                pdu = new Uint8Array(6 + byteCount);
-                pdu[0] = functionCode;
-                pdu[1] = (startAddress >> 8) & 0xFF;
-                pdu[2] = startAddress & 0xFF;
-                pdu[3] = (coilCount >> 8) & 0xFF;
-                pdu[4] = coilCount & 0xFF;
-                pdu[5] = byteCount;
-                for (let i = 0; i < coilCount; i++) {
-                    if (values?.[i]) {
-                        pdu[6 + Math.floor(i / 8)]! |= 1 << (i % 8);
-                    }
-                }
-                break;
-            }
-
-            case ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS: {
-                const regCount = values?.length ?? 0;
-                pdu = new Uint8Array(6 + regCount * 2);
-                pdu[0] = functionCode;
-                pdu[1] = (startAddress >> 8) & 0xFF;
-                pdu[2] = startAddress & 0xFF;
-                pdu[3] = (regCount >> 8) & 0xFF;
-                pdu[4] = regCount & 0xFF;
-                pdu[5] = regCount * 2;
-                for (let i = 0; i < regCount; i++) {
-                    const val = values?.[i] ?? 0;
-                    pdu[6 + i * 2] = (val >> 8) & 0xFF;
-                    pdu[7 + i * 2] = val & 0xFF;
-                }
-                break;
-            }
-
-            default:
-                throw new Error(`不支持的功能码: ${functionCode}`);
-        }
-
+        const pdu = encodeModbusRequestPdu(command);
         const unitId = command.slaveAddress & 0xFF;
         const adu = new Uint8Array(7 + pdu.length);
 
-        // 使用传入的事务 ID
         adu[0] = (tid >> 8) & 0xFF;
         adu[1] = tid & 0xFF;
         adu[2] = 0;
@@ -129,7 +47,6 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
         const length = pdu.length + 1;
         adu[4] = (length >> 8) & 0xFF;
         adu[5] = length & 0xFF;
-
         adu[6] = unitId;
         adu.set(pdu, 7);
 
@@ -165,47 +82,14 @@ export class ModbusTcpAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
             };
         }
 
-        const response: ModbusRtuResponse = {
+        return {
             protocol: ProtocolType.MODBUS_TCP,
             success: true,
             slaveAddress: unitId,
             functionCode,
-            raw: data
+            raw: data,
+            ...decodeModbusReadPayload(functionCode, data, 8)
         };
-
-        switch (functionCode) {
-            case ModbusFunctionCode.READ_COILS:
-            case ModbusFunctionCode.READ_DISCRETE_INPUTS: {
-                const byteCount = data[8]!;
-                const coils: boolean[] = [];
-                for (let i = 0; i < byteCount; i++) {
-                    for (let bit = 0; bit < 8; bit++) {
-                        coils.push((data[9 + i]! & (1 << bit)) !== 0);
-                    }
-                }
-                response.coils = coils;
-                break;
-            }
-
-            case ModbusFunctionCode.READ_HOLDING_REGISTERS:
-            case ModbusFunctionCode.READ_INPUT_REGISTERS: {
-                const byteCount = data[8]!;
-                const registers: number[] = [];
-                for (let i = 0; i < byteCount / 2; i++) {
-                    registers.push((data[9 + i * 2]! << 8) | data[10 + i * 2]!);
-                }
-                response.registers = registers;
-                break;
-            }
-
-            case ModbusFunctionCode.WRITE_SINGLE_COIL:
-            case ModbusFunctionCode.WRITE_SINGLE_REGISTER:
-            case ModbusFunctionCode.WRITE_MULTIPLE_COILS:
-            case ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS:
-                break;
-        }
-
-        return response;
     }
 
     checkFrame(buffer: Uint8Array): FrameCheckResult {

@@ -1,5 +1,3 @@
-import type { ModbusRequest, ModbusResponse } from './protocol.types';
-
 export enum TransportType {
     /** Web Serial API - 本地直连 */
     WEB_SERIAL = 'web_serial',
@@ -7,7 +5,7 @@ export enum TransportType {
     WEBSOCKET = 'websocket',
     /** MQTT - ESP32 远程采集 */
     MQTT = 'mqtt',
-    /** Local Bridge - 本地桥接程序 (WebSocket -> Go Bridge -> UDP) */
+    /** Local Bridge - 本地桥接程序 (WebSocket -> Go Bridge -> UDP/TCP) */
     BRIDGE = 'bridge'
 }
 
@@ -48,30 +46,6 @@ export interface ITransportAdapter {
 
     onStateChange(callback: (connected: boolean) => void): void;
 }
-
-export interface MqttTopicContext {
-    siteId: string;
-    gatewayId: string;
-}
-
-export interface MqttSessionTopicContext extends MqttTopicContext {
-    sessionId: string;
-}
-
-export type MqttRequestTopic = `anyport/${string}/${string}/request/${string}`;
-
-export type MqttResponseTopic = `anyport/${string}/${string}/response/${string}`;
-
-export type MqttStatusTopic = `anyport/${string}/${string}/status`;
-
-export type MqttStatusPayload = 'online' | 'offline';
-
-export type MqttRequestPayload = ModbusRequest;
-
-export type MqttResponsePayload = ModbusResponse;
-
-// --- [修复2.2] MqttTransport 扩展接口 ---
-// 将 MqttTransport 的专属方法正式纳入类型系统，消除 deviceStore 中的 as any 断言
 
 export interface GatewayStatusInfo {
     siteId: string;

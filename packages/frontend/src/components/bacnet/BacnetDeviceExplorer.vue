@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue';
+import { ref, computed, onUnmounted, watch } from 'vue';
 import { useDeviceStore } from '@/stores/deviceStore';
 import { ProtocolType } from '@shared/types/protocol.types';
 import { BacnetService } from '@/protocols/bacnet';
@@ -15,17 +15,12 @@ import {
   Server,
   Radio
 } from 'lucide-vue-next';
-import { watch } from 'vue';
 
 const props = defineProps<{
   protocolMode: 'mstp' | 'ip';
   targetIp: string;
   msTpMac: number;
   isConnected: boolean;
-}>();
-
-const emit = defineEmits<{
-  scan: [];
 }>();
 
 const deviceStore = useDeviceStore();

@@ -1,6 +1,6 @@
 /**
  * 协议层类型定义
- * 支持 Modbus、DL/T 645 等多种工业协议
+ * 支持 Modbus、BACnet、Raw Serial 等多种工业协议
  */
 
 /**
@@ -13,11 +13,11 @@ export enum ProtocolType {
     MODBUS_TCP = 'modbus_tcp',
     /** DL/T 645 电力协议 (第二期) */
     DLT645 = 'dlt645',
-    /** RS232/RS485 Hex 透传 (第二期) */
+    /** RS232/RS485 Hex 透传 */
     HEX_RAW = 'hex_raw',
-    /** BACnet MS/TP (第二期) */
+    /** BACnet MS/TP */
     BACNET_MSTP = 'bacnet_mstp',
-    /** BACnet/IP (第二期) */
+    /** BACnet/IP */
     BACNET_IP = 'bacnet_ip'
 }
 
@@ -58,10 +58,6 @@ export interface ProtocolResponse {
     /** 解析后的数据 */
     data?: unknown;
 }
-
-export type ModbusRequest = ProtocolCommand;
-
-export type ModbusResponse = ProtocolResponse;
 
 /**
  * 协议适配器接口

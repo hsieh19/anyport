@@ -11,7 +11,8 @@ import {
     type ProtocolCommand,
     type ProtocolResponse
 } from '@shared/types/protocol.types';
-import { calculateCRC16, crcToBytes, verifyCRC16 } from './crc16';
+import { appendCRC16, verifyCRC16 } from './crc16';
+import { encodeModbusRequestPdu, decodeModbusReadPayload } from './modbusPdu';
 
 /**
  * Modbus 功能码
@@ -81,101 +82,11 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
      * 编码 Modbus RTU 请求
      */
     encode(command: ModbusRtuCommand): Uint8Array {
-        const { slaveAddress, functionCode, startAddress, quantity, values } = command;
-
-        let pdu: Uint8Array;
-
-        switch (functionCode) {
-            case ModbusFunctionCode.READ_COILS:
-            case ModbusFunctionCode.READ_DISCRETE_INPUTS:
-            case ModbusFunctionCode.READ_HOLDING_REGISTERS:
-            case ModbusFunctionCode.READ_INPUT_REGISTERS:
-                // 读操作：地址 + 功能码 + 起始地址(2) + 数量(2)
-                pdu = new Uint8Array(6);
-                pdu[0] = slaveAddress;
-                pdu[1] = functionCode;
-                pdu[2] = (startAddress >> 8) & 0xFF;
-                pdu[3] = startAddress & 0xFF;
-                pdu[4] = ((quantity ?? 1) >> 8) & 0xFF;
-                pdu[5] = (quantity ?? 1) & 0xFF;
-                break;
-
-            case ModbusFunctionCode.WRITE_SINGLE_COIL:
-                // 写单个线圈：地址 + 功能码 + 线圈地址(2) + 值(2)
-                pdu = new Uint8Array(6);
-                pdu[0] = slaveAddress;
-                pdu[1] = functionCode;
-                pdu[2] = (startAddress >> 8) & 0xFF;
-                pdu[3] = startAddress & 0xFF;
-                // 0xFF00 = ON, 0x0000 = OFF
-                const coilValue = (values?.[0] ?? 0) ? 0xFF00 : 0x0000;
-                pdu[4] = (coilValue >> 8) & 0xFF;
-                pdu[5] = coilValue & 0xFF;
-                break;
-
-            case ModbusFunctionCode.WRITE_SINGLE_REGISTER:
-                // 写单个寄存器：地址 + 功能码 + 寄存器地址(2) + 值(2)
-                pdu = new Uint8Array(6);
-                pdu[0] = slaveAddress;
-                pdu[1] = functionCode;
-                pdu[2] = (startAddress >> 8) & 0xFF;
-                pdu[3] = startAddress & 0xFF;
-                const regValue = values?.[0] ?? 0;
-                pdu[4] = (regValue >> 8) & 0xFF;
-                pdu[5] = regValue & 0xFF;
-                break;
-
-            case ModbusFunctionCode.WRITE_MULTIPLE_COILS: {
-                // 写多个线圈
-                const coilCount = values?.length ?? 0;
-                const byteCount = Math.ceil(coilCount / 8);
-                pdu = new Uint8Array(7 + byteCount);
-                pdu[0] = slaveAddress;
-                pdu[1] = functionCode;
-                pdu[2] = (startAddress >> 8) & 0xFF;
-                pdu[3] = startAddress & 0xFF;
-                pdu[4] = (coilCount >> 8) & 0xFF;
-                pdu[5] = coilCount & 0xFF;
-                pdu[6] = byteCount;
-                // 打包线圈值
-                for (let i = 0; i < coilCount; i++) {
-                    if (values?.[i]) {
-                        pdu[7 + Math.floor(i / 8)]! |= (1 << (i % 8));
-                    }
-                }
-                break;
-            }
-
-            case ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS: {
-                // 写多个寄存器
-                const regCount = values?.length ?? 0;
-                pdu = new Uint8Array(7 + regCount * 2);
-                pdu[0] = slaveAddress;
-                pdu[1] = functionCode;
-                pdu[2] = (startAddress >> 8) & 0xFF;
-                pdu[3] = startAddress & 0xFF;
-                pdu[4] = (regCount >> 8) & 0xFF;
-                pdu[5] = regCount & 0xFF;
-                pdu[6] = regCount * 2;
-                for (let i = 0; i < regCount; i++) {
-                    const val = values?.[i] ?? 0;
-                    pdu[7 + i * 2] = (val >> 8) & 0xFF;
-                    pdu[8 + i * 2] = val & 0xFF;
-                }
-                break;
-            }
-
-            default:
-                throw new Error(`不支持的功能码: ${functionCode}`);
-        }
-
-        // 计算并附加 CRC
-        const crc = calculateCRC16(pdu);
-        const frame = new Uint8Array(pdu.length + 2);
-        frame.set(pdu);
-        frame.set(crcToBytes(crc), pdu.length);
-
-        return frame;
+        const pdu = encodeModbusRequestPdu(command);
+        const body = new Uint8Array(1 + pdu.length);
+        body[0] = command.slaveAddress & 0xFF;
+        body.set(pdu, 1);
+        return appendCRC16(body);
     }
 
     /**
@@ -213,49 +124,14 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
             };
         }
 
-        // 解析正常响应
-        const response: ModbusRtuResponse = {
+        return {
             protocol: ProtocolType.MODBUS_RTU,
             success: true,
             slaveAddress,
             functionCode,
-            raw: data
+            raw: data,
+            ...decodeModbusReadPayload(functionCode, data, 2)
         };
-
-        switch (functionCode) {
-            case ModbusFunctionCode.READ_COILS:
-            case ModbusFunctionCode.READ_DISCRETE_INPUTS: {
-                const byteCount = data[2]!;
-                const coils: boolean[] = [];
-                for (let i = 0; i < byteCount; i++) {
-                    for (let bit = 0; bit < 8; bit++) {
-                        coils.push((data[3 + i]! & (1 << bit)) !== 0);
-                    }
-                }
-                response.coils = coils;
-                break;
-            }
-
-            case ModbusFunctionCode.READ_HOLDING_REGISTERS:
-            case ModbusFunctionCode.READ_INPUT_REGISTERS: {
-                const byteCount = data[2]!;
-                const registers: number[] = [];
-                for (let i = 0; i < byteCount / 2; i++) {
-                    registers.push((data[3 + i * 2]! << 8) | data[4 + i * 2]!);
-                }
-                response.registers = registers;
-                break;
-            }
-
-            case ModbusFunctionCode.WRITE_SINGLE_COIL:
-            case ModbusFunctionCode.WRITE_SINGLE_REGISTER:
-            case ModbusFunctionCode.WRITE_MULTIPLE_COILS:
-            case ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS:
-                // 写操作响应，只需确认成功
-                break;
-        }
-
-        return response;
     }
 
     /**
@@ -263,10 +139,6 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
      */
     checkFrame(buffer: Uint8Array): FrameCheckResult {
         if (buffer.length < 5) {
-            // 这里我们至少需要读到功能码(index 1)和异常码(index 2)或者字节数(index 2)
-            // 所以长度限制至少要能判断出后续逻辑
-            // 不过标准的最小帧是异常帧 5 字节
-            // 如果还不到5字节，肯定是 INCOMPLETE (除非是特短的非标协议，但 Modbus RTU 最小就是5)
             return FrameCheckResult.INCOMPLETE;
         }
 
@@ -274,12 +146,9 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
 
         // 异常响应固定 5 字节
         if (functionCode & 0x80) {
-            if (buffer.length >= 5) {
-                return verifyCRC16(buffer.slice(0, 5))
-                    ? FrameCheckResult.COMPLETE
-                    : FrameCheckResult.INVALID;
-            }
-            return FrameCheckResult.INCOMPLETE;
+            return verifyCRC16(buffer.slice(0, 5))
+                ? FrameCheckResult.COMPLETE
+                : FrameCheckResult.INVALID;
         }
 
         // 计算期望长度
@@ -290,15 +159,11 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
             case ModbusFunctionCode.READ_DISCRETE_INPUTS:
             case ModbusFunctionCode.READ_HOLDING_REGISTERS:
             case ModbusFunctionCode.READ_INPUT_REGISTERS:
-                if (buffer.length < 3) return FrameCheckResult.INCOMPLETE;
                 expectedLength = 3 + buffer[2]! + 2; // 地址+功能码+字节数 + 数据 + CRC
                 break;
 
             case ModbusFunctionCode.WRITE_SINGLE_COIL:
             case ModbusFunctionCode.WRITE_SINGLE_REGISTER:
-                expectedLength = 8;
-                break;
-
             case ModbusFunctionCode.WRITE_MULTIPLE_COILS:
             case ModbusFunctionCode.WRITE_MULTIPLE_REGISTERS:
                 expectedLength = 8;
@@ -312,7 +177,6 @@ export class ModbusRtuAdapter implements IProtocolAdapter<ModbusRtuCommand, Modb
             return FrameCheckResult.INCOMPLETE;
         }
 
-        // 验证 CRC
         return verifyCRC16(buffer.slice(0, expectedLength))
             ? FrameCheckResult.COMPLETE
             : FrameCheckResult.INVALID;

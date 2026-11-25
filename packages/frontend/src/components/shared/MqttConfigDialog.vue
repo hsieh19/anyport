@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useDeviceStore } from '@/stores/deviceStore';
+import { fetchCloudMqttConfig } from '@/services/cloudConfigService';
 
 interface Props {
   show: boolean;
@@ -34,20 +35,7 @@ async function fetchCloudConfig() {
   syncSuccess.value = false;
 
   try {
-    const res = await fetch('https://update.anyport.one/anyport/mqtt-config', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ code: pwd })
-    });
-
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({ error: '网络错误' }));
-      throw new Error(errData.error || `请求失败 (${res.status})`);
-    }
-
-    const data = await res.json();
+    const data = await fetchCloudMqttConfig(pwd);
 
     // 自动填充 Store 响应式对象
     deviceStore.mqttConfig.brokerUrl = data.brokerUrl || '';

@@ -7,6 +7,7 @@ import {
   type GatewayStatusInfo
 } from '@shared/types/transport.types';
 import { bytesToHexCompact, hexToBytes } from '@/utils/hex';
+import { generateUUID } from '@/utils/id';
 
 export class MqttTransport implements IMqttTransport {
   readonly type = TransportType.MQTT;
@@ -455,10 +456,7 @@ export class MqttTransport implements IMqttTransport {
 
 
   private createSessionId(): string {
-    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-      return crypto.randomUUID();
-    }
-    return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+    return generateUUID();
   }
 }
 

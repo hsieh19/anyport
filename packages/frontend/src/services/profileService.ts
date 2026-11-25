@@ -4,6 +4,7 @@
  * 目前基于本地 IndexedDB 实现，未来可切换为 Rest API
  */
 import { profileDb } from '@/utils/db';
+import { generateUUID } from '@/utils/id';
 import type { DeviceProfile, SavedProfile } from '@/types/profile';
 
 export const ProfileService = {
@@ -29,18 +30,6 @@ export const ProfileService = {
         if (!data.protocol_summary || !data.registers) {
             throw new Error('无效的配置文件格式：缺少 protocol_summary 或 registers');
         }
-
-        const generateUUID = () => {
-            if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-                return crypto.randomUUID();
-            }
-            // Fallback for non-secure contexts (HTTP)
-            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-                const r = (Math.random() * 16) | 0;
-                const v = c === 'x' ? r : (r & 0x3) | 0x8;
-                return v.toString(16);
-            });
-        };
 
         const id = existingId || generateUUID();
 

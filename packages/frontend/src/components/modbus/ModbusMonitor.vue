@@ -137,19 +137,19 @@ const isBitMode = computed(() => {
           <div class="format-switch flex gap-1 bg-slate-100/50 p-1 rounded-md">
             <button 
               class="px-2 py-1 text-xs rounded transition-colors"
-              :class="{ 'bg-blue-500 text-white shadow': displayFormat === 'hex', 'text-gray-500 hover:text-gray-800 hover:bg-slate-200': displayFormat !== 'hex' }" 
+              :class="{ active: displayFormat === 'hex', 'bg-blue-500 text-white shadow': displayFormat === 'hex', 'text-gray-500 hover:text-gray-800 hover:bg-slate-200': displayFormat !== 'hex' }" 
               @click="displayFormat = 'hex'"
               title="十六进制"
             >HEX</button>
             <button 
               class="px-2 py-1 text-xs rounded transition-colors"
-              :class="{ 'bg-blue-500 text-white shadow': displayFormat === 'dec', 'text-gray-500 hover:text-gray-800 hover:bg-slate-200': displayFormat !== 'dec' }" 
+              :class="{ active: displayFormat === 'dec', 'bg-blue-500 text-white shadow': displayFormat === 'dec', 'text-gray-500 hover:text-gray-800 hover:bg-slate-200': displayFormat !== 'dec' }" 
               @click="displayFormat = 'dec'"
               title="十进制"
             >DEC</button>
             <button 
               class="px-2 py-1 text-xs rounded transition-colors"
-              :class="{ 'bg-blue-500 text-white shadow': displayFormat === 'bin', 'text-gray-500 hover:text-gray-800 hover:bg-slate-200': displayFormat !== 'bin' }" 
+              :class="{ active: displayFormat === 'bin', 'bg-blue-500 text-white shadow': displayFormat === 'bin', 'text-gray-500 hover:text-gray-800 hover:bg-slate-200': displayFormat !== 'bin' }" 
               @click="displayFormat = 'bin'"
               title="二进制"
             >BIN</button>

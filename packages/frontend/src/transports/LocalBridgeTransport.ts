@@ -7,6 +7,8 @@ import {
     type ConnectionConfig,
     type ITransportAdapter
 } from '@shared/types/transport.types';
+import { bytesToHexCompact, hexToBytes } from '@/utils/hex';
+import { generateShortId } from '@/utils/id';
 
 export class LocalBridgeTransport implements ITransportAdapter {
     readonly type = TransportType.BRIDGE;
@@ -73,8 +75,7 @@ export class LocalBridgeTransport implements ITransportAdapter {
                                 this.errorCallback?.(new Error(hex));
                                 return;
                             }
-                            const bytes = new Uint8Array(hex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
-                            this.dataCallback?.(bytes);
+                            this.dataCallback?.(hexToBytes(hex));
                         }
                     } catch (e) {
                         console.error('Bridge message parse error:', e);
@@ -111,15 +112,11 @@ export class LocalBridgeTransport implements ITransportAdapter {
             throw new Error('Bridge not connected');
         }
 
-        const hex = Array.from(data)
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('');
-
         const msg = {
             type: 'tx',
             protocol: this.protocol,
             target: `${this.targetIp}:${this.targetPort}`,
-            payload: hex
+            payload: bytesToHexCompact(data).toLowerCase()
         };
 
         this.ws.send(JSON.stringify(msg));
@@ -145,7 +142,7 @@ export class LocalBridgeTransport implements ITransportAdapter {
             throw new Error('网桥未连接，请先点击"连接网关"');
         }
 
-        const id = Math.random().toString(36).slice(2, 10);
+        const id = generateShortId('pb');
 
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {

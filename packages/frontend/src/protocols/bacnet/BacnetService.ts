@@ -7,6 +7,7 @@ import {
     BacnetApplicationTag,
     BACNET_UNITS_NAMES
 } from './constants';
+import { hexToBytes } from '@/utils/hex';
 
 export interface ParsedItemData {
     propId: string;
@@ -218,20 +219,14 @@ export class BacnetService {
                                 try {
                                     const offset = (tagByte === 0x7E) ? 6 : 4;
                                     const content = rawVal.substring(offset);
-                                    const matches = content.match(/.{1,2}/g);
-                                    if (matches) {
-                                        const bytes = matches.map(x => parseInt(x, 16));
-                                        value = new TextDecoder('utf-8').decode(new Uint8Array(bytes));
-                                    } else {
-                                        value = "";
-                                    }
+                                    const bytes = hexToBytes(content);
+                                    value = bytes.length > 0 ? new TextDecoder('utf-8').decode(bytes) : "";
                                 } catch {
                                     value = "Decode Error";
                                 }
                             } else if (tag === BacnetApplicationTag.Real) {
-                                const bufMatch = rawVal.substring(2, 10).match(/.{1,2}/g);
-                                if (bufMatch) {
-                                    const buf = new Uint8Array(bufMatch.map(x => parseInt(x, 16)));
+                                const buf = hexToBytes(rawVal.substring(2, 10));
+                                if (buf.length === 4) {
                                     value = new DataView(buf.buffer).getFloat32(0).toFixed(4);
                                 }
                             } else if (tag === BacnetApplicationTag.Boolean) {

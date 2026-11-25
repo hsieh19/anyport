@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.4.0] - 2026-11-25
+
+### Added
+
+- **网关 OTA 双分区容灾回滚与 Markdown 更新日志渲染 (`GatewayOtaTab.vue`, `utils/markdown.ts`)**:
+  - 适配 ESP32 双 OTA 分区（A/B 分区）容灾机制，实时展示当前运行固件版本与备用分区固件版本（`otaBackupVersion`），支持在升级异常时通过“一键回滚备用固件”安全恢复至上一稳定版本。
+  - 引入 `marked` 引擎并封装 `renderMarkdown` 工具，支持在检测到新固件时将云端下发的 OTA 更新日志（Changelog）渲染为结构化 GFM Markdown 视图。
+- **公共基础服务与工具模块提取**:
+  - 新增 Modbus 公共 PDU 编解码核心（`protocols/modbus/modbusPdu.ts`），封装 `encodeModbusRequestPdu` 与 `decodeModbusReadPayload`。
+  - 新增云端 MQTT 配置提取服务（`services/cloudConfigService.ts`），将云端凭据拉取逻辑从 UI 组件中解耦。
+  - 新增通用 ID 与时间格式化工具（`utils/id.ts`），统一提供兼容非安全上下文的 `generateUUID`、轻量短标识 `generateShortId` 及 `formatDateTime` / `formatTimeWithMs`。
+
+### Changed
+
+- **网关控制台架构模块化深度重构 (`GatewayConsoleView.vue` -> `views/gateway/`)**:
+  - 将原本超过 2,700 行的巨型单文件 `GatewayConsoleView.vue` 按职责拆分为高内聚的模块化架构（主视图精简至 69 行）：
+    - **业务逻辑层 (`composables/useGatewayConsole.ts`)**：集中管理网关连接轮询、参数表单、总线嗅探、从站模拟器与 OTA 状态。
+    - **视图组件层 (`components/`)**：拆分为 `GatewayTopbar`（顶部硬件遥测栏）、`GatewayNetworkTab`（基础与端口配置）、`GatewayModeTab`（7 种业务模式配置）、`GatewayMonitorPanel`（总线监听与质量诊断）、`GatewaySimPanel`（内置从站模拟器）、`GatewayOtaTab`（固件维护与容灾回滚）与 `GatewayDialogs`（DHCP 新 IP 上报及全局诊断弹窗）。
+    - **独立样式与类型契约 (`styles/gateway-console.css`, `types.ts`)**：实现视图结构、交互逻辑与样式表彻底解耦。
+- **协议层、状态层与样式表精简去重**:
+  - **Modbus 双适配器归一**：`ModbusRtuAdapter` 与 `ModbusTcpAdapter` 统一复用 `modbusPdu.ts` 与 `appendCRC16`，消除双端重复的请求帧构建与响应负载解析代码。
+  - **BACnet 与传输层清理**：在 `BacnetService` 与 `LocalBridgeTransport` 中统一复用 `@/utils/hex`（`hexToBytes`、`bytesToHexCompact`）；移除 `bacnetCrc.ts` 中冗余的非查表版 `calculateBacnetCrc8` 函数。
+  - **Modbus 日志与状态优化**：在 `useModbusLogs.ts` 中提取 `matchProfileRegister` 统一处理点表寄存器与多字从属匹配；清理 `useModbusState.ts` 与 `@anyport/shared` 中未使用的冗余状态与类型定义。
+  - **样式系统瘦身**：清理 `modbus-ui.css` 中约 650 行历史冗余样式，并在全局 `style.css` 中补齐 `--color-bg-dim`、`--color-text-muted`、`--color-primary-light`、`--font-mono` 等主题 CSS 变量。
+- **工程化配置与文档治理**:
+  - 将根目录及前端包的 `lint` 脚本更新为 `typecheck`（`vue-tsc -b`），强化构建前类型检查。
+  - 清理过期冗余文件（移除 `overview.md`、`packages/frontend/README.md`、`packages/frontend/.gitignore`、`tools/anyport-bridge/build.bat` 及 `main.go` 中未使用的全局变量）。
+  - 重构并精简 `.gitignore` 与 `README.md` 项目架构文档。
+
+### Fixed
+
+- **网关列表移除逻辑修复 (`deviceStore.ts`)**:
+  - 修复 `removeGateway` 仅匹配 `gatewayId` 导致按复合 `id`（`siteId/gatewayId`）删除网关失败的问题。
+- **格式切换按钮激活态补充 (`ModbusMonitor.vue`)**:
+  - 为监控面板 HEX / DEC / BIN 格式切换按钮补充 `active` 类名绑定，修复主题样式下的激活态指示。
+
 ## [1.3.2] - 2026-11-23
 
 ### Added

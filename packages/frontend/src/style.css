@@ -4,18 +4,25 @@
 :root {
   /* 颜色 */
   --color-bg: #0f0f1a;
+  --color-bg-dim: #141424;
   --color-surface: #1a1a2e;
   --color-surface-hover: #252542;
   --color-border: #2d2d4a;
   --color-text: #e8e8f0;
   --color-text-secondary: #8888a0;
+  --color-text-muted: #6b7280;
 
   /* 主题色 */
   --color-primary: #667eea;
   --color-primary-hover: #5a6fd6;
+  --color-primary-light: rgba(102, 126, 234, 0.14);
+  --color-primary-dim: rgba(102, 126, 234, 0.35);
   --color-success: #11998e;
   --color-warning: #f5a623;
   --color-error: #f5576c;
+
+  /* 字体族变量 */
+  --font-mono: 'Consolas', 'Monaco', 'Fira Code', monospace;
 
   /* 渐变 */
   --gradient-primary: linear-gradient(135deg, #667eea, #764ba2);
@@ -58,11 +65,13 @@
 @media (prefers-color-scheme: light) {
   :root {
     --color-bg: #f5f7fa;
+    --color-bg-dim: #eef1f6;
     --color-surface: #ffffff;
     --color-surface-hover: #f0f2f5;
     --color-border: #e0e4e8;
     --color-text: #1a1a2e;
     --color-text-secondary: #6b7280;
+    --color-text-muted: #9ca3af;
 
     color-scheme: light;
   }
