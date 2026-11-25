@@ -35,9 +35,6 @@ importers:
         specifier: ^3.5.24
         version: 3.5.27(typescript@5.9.3)
     devDependencies:
-      '@types/mqtt':
-        specifier: ^2.5.0
-        version: 2.5.0
       '@types/node':
         specifier: ^24.10.1
         version: 24.10.10
@@ -975,10 +972,6 @@ packages:
 
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
-
-  '@types/mqtt@2.5.0':
-    resolution: {integrity: sha512-n+0/ErBin30j+UbhcHGK/STjHjh65k85WNR6NlUjRG0g9yctpF12pS+SOkwz0wmp+7momAo9Cyi4Wmvy8UsCQg==}
-    deprecated: This is a stub types definition for MQTT (https://github.com/mqttjs/MQTT.js). MQTT provides its own type definitions, so you don't need @types/mqtt installed!
 
   '@types/node@24.10.10':
     resolution: {integrity: sha512-+0/4J266CBGPUq/ELg7QUHhN25WYjE0wYTPSQJn1xeu8DOlIOPxXxrNGiLmfAWl7HMMgWFWXpt9IDjMWrF5Iow==}
@@ -3625,14 +3618,6 @@ snapshots:
   '@types/estree@0.0.39': {}
 
   '@types/estree@1.0.8': {}
-
-  '@types/mqtt@2.5.0':
-    dependencies:
-      mqtt: 5.15.0
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
 
   '@types/node@24.10.10':
     dependencies:
